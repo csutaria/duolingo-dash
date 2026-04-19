@@ -16,13 +16,17 @@ import {
   getAchievements,
 } from "@/lib/queries";
 
+const DEMO_MODE = process.env.DEMO_MODE === "true";
+
 export async function GET(request: NextRequest) {
-  const client = getClientOrNull();
-  if (!client) {
-    return NextResponse.json(
-      { error: "Not authenticated. Set DUOLINGO_JWT environment variable." },
-      { status: 401 },
-    );
+  if (!DEMO_MODE) {
+    const client = getClientOrNull();
+    if (!client) {
+      return NextResponse.json(
+        { error: "Not authenticated. Set DUOLINGO_JWT environment variable." },
+        { status: 401 },
+      );
+    }
   }
 
   const { searchParams } = request.nextUrl;

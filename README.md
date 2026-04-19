@@ -2,6 +2,19 @@
 
 Personal Duolingo learning dashboard. All data stays local — API calls go directly to duolingo.com, no third-party services.
 
+![Overview](docs/screenshots/overview.png)
+
+<details>
+<summary>More screenshots</summary>
+
+![XP History](docs/screenshots/xp-history.png)
+
+![Course Detail](docs/screenshots/course-detail.png)
+
+![Vocabulary](docs/screenshots/vocabulary.png)
+
+</details>
+
 ## Setup
 
 ```bash

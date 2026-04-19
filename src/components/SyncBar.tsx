@@ -100,6 +100,7 @@ export function SyncBar() {
   const lastResult = status?.lastSyncResult as Record<string, unknown> | null;
   const hasError = lastResult?.error;
 
+  const demoMode = status?.demoMode === true;
   const authenticated = status?.authenticated === true;
   const pollingOn = status?.polling === true;
   const currentlyRunning = status?.currentlyRunning === true || syncing;
@@ -125,6 +126,14 @@ export function SyncBar() {
           : nextPollMin != null && nextPollMin > 0
             ? `Poll in ~${nextPollMin}m`
             : "Polling";
+
+  if (demoMode) {
+    return (
+      <span className="text-xs text-zinc-500 border border-zinc-700 rounded px-2 py-1">
+        Demo
+      </span>
+    );
+  }
 
   return (
     <div className="flex shrink-0 flex-nowrap items-center justify-end gap-3 text-sm">
