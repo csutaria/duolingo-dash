@@ -32,22 +32,6 @@ Alternatively, in the **Network** tab, find any request to duolingo.com and copy
 
 ### Run the dashboard
 
-**With 1Password** (recommended — token never touches terminal or disk):
-
-Create a `.env.1password` file with a 1Password secret reference pointing to your JWT:
-
-```bash
-echo 'DUOLINGO_JWT="op://YourVault/Duolingo/jwt"' > .env.1password
-```
-
-Replace `YourVault`, `Duolingo`, and `jwt` with your actual vault name, item name, and field name. Then run:
-
-```bash
-op run --env-file=.env.1password -- npm run dev
-```
-
-**Without 1Password:**
-
 ```bash
 read -s DUOLINGO_JWT && export DUOLINGO_JWT
 npm run dev
