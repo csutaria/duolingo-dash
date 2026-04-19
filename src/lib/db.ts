@@ -2,7 +2,8 @@ import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
 
-const DB_PATH = path.join(process.cwd(), "data", "duolingo.db");
+const DEMO_MODE = process.env.DEMO_MODE === "true";
+const DB_PATH = path.join(process.cwd(), "data", DEMO_MODE ? "mock.db" : "duolingo.db");
 
 let db: Database.Database | null = null;
 

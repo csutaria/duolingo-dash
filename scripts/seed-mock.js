@@ -341,8 +341,4 @@ for (let i = 0; i < vocabWords.length; i++) {
 
 db.close();
 console.log(`✓ Mock database written to: ${OUT}`);
-console.log(`\nTo use for screenshots:`);
-console.log(`  cp data/duolingo.db data/duolingo.db.bak`);
-console.log(`  cp ${OUT} data/duolingo.db`);
-console.log(`  # restart dev server, take screenshots`);
-console.log(`  cp data/duolingo.db.bak data/duolingo.db`);
+console.log(`\nTo use: DEMO_MODE=true npm run dev`);
