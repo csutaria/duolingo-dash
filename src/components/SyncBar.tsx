@@ -8,6 +8,47 @@ function ceilMin(ms: number): number {
   return Math.max(0, Math.ceil(ms / 60_000));
 }
 
+type CurrentSync = { type: "single" | "cycle"; startedAtMs: number };
+
+function SyncProgressBar({
+  startedAtMs,
+  expectedMs,
+}: {
+  startedAtMs: number;
+  expectedMs: number | null;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, []);
+
+  const elapsed = Math.max(0, now - startedAtMs);
+  const determinate = expectedMs != null && expectedMs > 0;
+  const progress = determinate ? Math.min(elapsed / expectedMs, 0.95) : 0;
+
+  return (
+    <div
+      className="mt-1 h-1 w-full overflow-hidden rounded-full bg-zinc-800"
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={determinate ? Math.round(progress * 100) : undefined}
+      aria-label="Sync progress"
+    >
+      {determinate ? (
+        <div
+          className="h-full rounded-full bg-yellow-400 transition-[width] duration-300 ease-out"
+          style={{ width: `${progress * 100}%` }}
+        />
+      ) : (
+        <div className="h-full w-full animate-pulse rounded-full bg-yellow-400/60" />
+      )}
+    </div>
+  );
+}
+
 const panelBase =
   "absolute top-full right-0 z-[200] mt-2 w-max max-w-[min(22rem,calc(100vw-1.5rem))] max-h-[min(70vh,calc(100vh-6rem))] overflow-y-auto rounded-md border border-zinc-600 bg-zinc-900 px-3 py-2.5 text-left text-xs text-zinc-300 shadow-xl transition-opacity duration-150";
 
@@ -27,6 +68,8 @@ function SyncStatusPanel({
   visible,
   onTogglePaused,
   pauseBusy,
+  currentSync,
+  expectedMsForCurrent,
 }: {
   lastSync: string | null;
   syncError: string | null;
@@ -40,6 +83,8 @@ function SyncStatusPanel({
   visible: boolean;
   onTogglePaused: () => void;
   pauseBusy: boolean;
+  currentSync: CurrentSync | null;
+  expectedMsForCurrent: number | null;
 }) {
   const stateLabel = !authenticated
     ? { text: "Not connected", color: "text-red-400" }
@@ -68,6 +113,12 @@ function SyncStatusPanel({
           <span className="font-medium text-zinc-100">Sync</span>
           <span className={stateLabel.color}>● {stateLabel.text}</span>
         </div>
+        {currentSync && (
+          <SyncProgressBar
+            startedAtMs={currentSync.startedAtMs}
+            expectedMs={expectedMsForCurrent}
+          />
+        )}
         {lastSync != null ? (
           <p className="text-[11px] text-zinc-400">
             Last sync:{" "}
@@ -212,6 +263,16 @@ export function SyncBar() {
   const msUntilNextAllCourseSync =
     (status?.msUntilNextAllCourseSync as number | null) ?? null;
 
+  const currentSync = (status?.currentSync as CurrentSync | null) ?? null;
+  const expectedDurationMs = status?.expectedDurationMs as
+    | { single: number | null; cycle: number | null }
+    | undefined;
+  const expectedMsForCurrent = currentSync
+    ? currentSync.type === "cycle"
+      ? expectedDurationMs?.cycle ?? null
+      : expectedDurationMs?.single ?? null
+    : null;
+
   const indicatorColor =
     !status || !authenticated
       ? "text-red-500"
@@ -296,6 +357,8 @@ export function SyncBar() {
           visible={panelVisible}
           onTogglePaused={handleTogglePaused}
           pauseBusy={pauseBusy}
+          currentSync={currentSync}
+          expectedMsForCurrent={expectedMsForCurrent}
         />
       </div>
 

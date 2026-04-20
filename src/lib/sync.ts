@@ -12,6 +12,7 @@ import {
   upsertAchievements,
 } from "./db";
 import { resolveLegacyLanguageData } from "./legacy-language-data";
+import { clearCurrentSync, setCurrentSync } from "./sync-state";
 import { DuolingoUser, XpSummary } from "./types";
 
 export interface SyncResult {
@@ -33,7 +34,10 @@ export async function quickCheck(
 
 export async function fullSync(client: DuolingoClient, cycleAllCourses = false): Promise<SyncResult> {
   const now = new Date().toISOString();
+  const startedAtMs = Date.now();
   let totalXp = 0;
+
+  setCurrentSync(cycleAllCourses ? "cycle" : "single");
 
   try {
     const user = await client.getUser();
@@ -56,12 +60,27 @@ export async function fullSync(client: DuolingoClient, cycleAllCourses = false):
       await saveLanguageDetails(client, user.currentCourseId, user.learningLanguage);
     }
 
-    logSync("full", totalXp, true);
+    logSync({
+      syncType: "full",
+      totalXp,
+      success: true,
+      durationMs: Date.now() - startedAtMs,
+      cycleAll: cycleAllCourses,
+    });
     return { type: "full", changed: true, totalXp, timestamp: now };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logSync("full", totalXp, false, msg);
+    logSync({
+      syncType: "full",
+      totalXp,
+      success: false,
+      errorMessage: msg,
+      durationMs: Date.now() - startedAtMs,
+      cycleAll: cycleAllCourses,
+    });
     return { type: "full", changed: false, totalXp, error: msg, timestamp: now };
+  } finally {
+    clearCurrentSync();
   }
 }
 
@@ -73,13 +92,13 @@ export async function syncIfChanged(
   try {
     const { changed, currentXp } = await quickCheck(client, currentXpHint);
     if (!changed) {
-      logSync("quick", currentXp, true);
+      logSync({ syncType: "quick", totalXp: currentXp, success: true });
       return { type: "skipped", changed: false, totalXp: currentXp, timestamp: now };
     }
     return fullSync(client);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logSync("quick", 0, false, msg);
+    logSync({ syncType: "quick", totalXp: 0, success: false, errorMessage: msg });
     return { type: "quick", changed: false, totalXp: 0, error: msg, timestamp: now };
   }
 }

@@ -129,6 +129,19 @@ function initSchema(db: Database.Database): void {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
+
+  migrateSyncLog(db);
+}
+
+function migrateSyncLog(db: Database.Database): void {
+  const columns = db.prepare("PRAGMA table_info(sync_log)").all() as Array<{ name: string }>;
+  const has = (name: string) => columns.some((c) => c.name === name);
+  if (!has("duration_ms")) {
+    db.exec("ALTER TABLE sync_log ADD COLUMN duration_ms INTEGER");
+  }
+  if (!has("cycle_all")) {
+    db.exec("ALTER TABLE sync_log ADD COLUMN cycle_all INTEGER NOT NULL DEFAULT 0");
+  }
 }
 
 export function getLastSyncXp(): number | null {
@@ -157,16 +170,47 @@ export function getLastSync(): string | null {
   return row?.sync_time ?? null;
 }
 
-export function logSync(
-  syncType: "quick" | "full",
-  totalXp: number,
-  success: boolean,
-  errorMessage?: string,
-): void {
+export function logSync(args: {
+  syncType: "quick" | "full";
+  totalXp: number;
+  success: boolean;
+  errorMessage?: string;
+  durationMs?: number;
+  cycleAll?: boolean;
+}): void {
   const db = getDb();
   db.prepare(
-    "INSERT INTO sync_log (sync_time, sync_type, total_xp, success, error_message) VALUES (?, ?, ?, ?, ?)",
-  ).run(new Date().toISOString(), syncType, totalXp, success ? 1 : 0, errorMessage ?? null);
+    `INSERT INTO sync_log (sync_time, sync_type, total_xp, success, error_message, duration_ms, cycle_all)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    new Date().toISOString(),
+    args.syncType,
+    args.totalXp,
+    args.success ? 1 : 0,
+    args.errorMessage ?? null,
+    args.durationMs ?? null,
+    args.cycleAll ? 1 : 0,
+  );
+}
+
+export function getMedianDurationMs(cycleAll: boolean, limit = 3): number | null {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT duration_ms FROM sync_log
+       WHERE sync_type = 'full' AND success = 1
+         AND cycle_all = ?
+         AND duration_ms IS NOT NULL
+       ORDER BY id DESC
+       LIMIT ?`,
+    )
+    .all(cycleAll ? 1 : 0, limit) as Array<{ duration_ms: number | null }>;
+  const durations = rows
+    .map((r) => r.duration_ms)
+    .filter((d): d is number => typeof d === "number" && d > 0);
+  if (durations.length === 0) return null;
+  const sorted = [...durations].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
 }
 
 export function upsertProfile(data: Record<string, unknown>): void {
