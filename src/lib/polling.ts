@@ -1,6 +1,21 @@
 import { DuolingoClient } from "./duolingo";
 import { quickCheck, fullSync, SyncResult } from "./sync";
-import { getCurrentSync } from "./sync-state";
+import { getCurrentSync, CurrentSync } from "./sync-state";
+
+/**
+ * @internal exported for tests
+ *
+ * The kickoff `pollOnce` inside `startPolling` must not run when another sync
+ * is already in flight. Regression guard for the resume-during-sync case
+ * (commit 84935f3): `isRunning` covers the interval-tick or manual-refresh
+ * path, and `currentSync` covers a `fullSync` started by any other caller.
+ */
+export function shouldKickoffPoll(state: {
+  isRunning: boolean;
+  currentSync: CurrentSync | null;
+}): boolean {
+  return !state.isRunning && state.currentSync == null;
+}
 
 const POLL_INTERVAL_MS = 15 * 60 * 1000;
 const ALL_COURSE_INTERVAL_MS = 3 * 60 * 60 * 1000;
@@ -63,7 +78,7 @@ export function startPolling(client: DuolingoClient): void {
   // Skip the kickoff if a sync is already in flight (e.g. resume during sync)
   // so we don't spawn a concurrent fullSync. The next interval tick will
   // handle any genuinely new work.
-  if (!isRunning && getCurrentSync() == null) {
+  if (shouldKickoffPoll({ isRunning, currentSync: getCurrentSync() })) {
     isRunning = true;
     pollOnce(client)
       .then((r) => {

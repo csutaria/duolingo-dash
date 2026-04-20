@@ -52,14 +52,14 @@ Planned tests, grouped by surface. Roughly priority-ordered within each group. I
 
 ### Pause / progress feature surface (this push)
 
-- [ ] `migrateSyncLog` idempotency — runs twice safely, adds `duration_ms` and `cycle_all` only when missing, pre-existing rows get `cycle_all = 0` via the column default.
-- [ ] `logSync` options signature — full syncs persist `durationMs` + `cycleAll`, quick syncs insert with `duration_ms = NULL` and `cycle_all = 0`.
-- [ ] `getMedianDurationMs(cycleAll, limit)` — filters on `sync_type = 'full'` AND `success = 1` AND `cycle_all` AND non-null `duration_ms`; returns median of the most recent `limit` rows; returns `null` when no rows match; `cycle_all` rows don't cross-contaminate.
-- [ ] `sync-state.ts` — default `null`; `setCurrentSync` populates with recent `startedAtMs`; `clearCurrentSync` resets; second `setCurrentSync` overwrites (last-write-wins).
-- [ ] `server-state` pause/resume — `isUserPaused()` default false; `pauseUserPolling()` stops polling; `resumeUserPolling()` restarts if a client exists; `ensureClient()` does **not** `startPolling` when `userPaused === true`. Use `jest.isolateModules` per case.
-- [ ] `/api/polling` route — handler-level test: `{ action: "pause" }` → 200 + `{ paused: true, polling: false }`; `{ action: "resume" }` → 200 + `{ paused: false, polling: true }` (JWT present); invalid/missing action → 400.
-- [ ] `polling.ts` kickoff guard — regression for commit `84935f3`: `startPolling` must not enqueue a kickoff `pollOnce` when `isRunning` or `currentSync != null`. Likely requires extracting a small `shouldKickoff()` predicate; confirm refactor before writing.
-- [ ] `fullSync` clears `currentSync` in a `finally` even when the call throws. Requires mocking `DuolingoClient`; confirm scope before writing.
+- [x] `migrateSyncLog` idempotency — runs twice safely, adds `duration_ms` and `cycle_all` only when missing, pre-existing rows get `cycle_all = 0` via the column default. (`sync-log.test.ts`)
+- [x] `logSync` options signature — full syncs persist `durationMs` + `cycleAll`, quick syncs insert with `duration_ms = NULL` and `cycle_all = 0`. (`sync-log.test.ts`)
+- [x] `getMedianDurationMs(cycleAll, limit)` — filters on `sync_type = 'full'` AND `success = 1` AND `cycle_all` AND non-null `duration_ms`; returns median of the most recent `limit` rows; returns `null` when no rows match; `cycle_all` rows don't cross-contaminate. (`sync-log.test.ts`)
+- [x] `sync-state.ts` — default `null`; `setCurrentSync` populates with recent `startedAtMs`; `clearCurrentSync` resets; second `setCurrentSync` overwrites (last-write-wins). (`sync-state.test.ts`)
+- [x] `server-state` pause/resume — `isUserPaused()` default false; `pauseUserPolling()` stops polling; `resumeUserPolling()` restarts if a client exists; `ensureClient()` does **not** `startPolling` when `userPaused === true`. Uses `jest.doMock` on `./polling` + `./duolingo` so no timers start. (`server-state.test.ts`)
+- [x] `/api/polling` route — handler-level test: `{ action: "pause" }` → 200 + `{ paused: true, polling: false }`; `{ action: "resume" }` → 200 + `{ paused: false, polling: true }`; invalid/missing/malformed action → 400; `ensureClient` failure → 500; ordering guarantee `ensureClient` before `resumeUserPolling`. (`src/app/api/polling/__tests__/route.test.ts`)
+- [x] `polling.ts` kickoff guard — regression for commit `84935f3`: `shouldKickoffPoll({isRunning, currentSync})` returns false when either guard is set. Predicate extracted from the inline condition in `startPolling`; behavior unchanged. (`polling.test.ts`)
+- [x] `fullSync` clears `currentSync` in a `finally` even when the call throws. Error path only (see `fullsync-instrumentation.test.ts` header for scope rationale): asserts `currentSync.type` during the in-flight call is `single`/`cycle` as expected, is `null` after the call returns, and that `logSync` receives the right error metadata. Success path is structurally protected by the same finally and is planned alongside path-based skill progress fixtures. (`fullsync-instrumentation.test.ts`)
 
 ### Path-based skill progress (`94e3fab`)
 

@@ -133,7 +133,8 @@ function initSchema(db: Database.Database): void {
   migrateSyncLog(db);
 }
 
-function migrateSyncLog(db: Database.Database): void {
+/** @internal exported for tests */
+export function migrateSyncLog(db: Database.Database): void {
   const columns = db.prepare("PRAGMA table_info(sync_log)").all() as Array<{ name: string }>;
   const has = (name: string) => columns.some((c) => c.name === name);
   if (!has("duration_ms")) {

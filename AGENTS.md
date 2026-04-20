@@ -1,10 +1,6 @@
-
-
 # This is NOT the Next.js you know
 
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
-
-
 
 ## Docs layout
 
@@ -20,7 +16,7 @@ Do not treat the local codebase, comments, or prior chat as the source of truth 
 
 `**docs/api-map.md`** — Duolingo endpoints ↔ this app (legacy `language_data` key resolution, local `xp_daily` aggregates, sync behavior, cross-cutting API caveats). Keep in sync when Duolingo API understanding changes.
 
-`**docs/architecture.md**` — runtime structure: polling cadence, pause semantics, sync pipeline, `sync_log` schema, internal API routes. Keep in sync when server-side behavior changes.
+`**docs/architecture.md`** — runtime structure: polling cadence, pause semantics, sync pipeline, `sync_log` schema, internal API routes. Keep in sync when server-side behavior changes.
 
 `**README.md**` — setup and user-visible behavior (run commands, course-cycling disruption, pause, progress bar). Keep in sync when anything a first-time user sees changes.
 
