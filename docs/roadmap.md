@@ -9,6 +9,13 @@
 - Review README for accuracy and completeness
 - Once functionality is stable, do a clean commit
 
+### Demo screenshot regeneration — one command
+
+- Today screenshots require several manual steps: seed the mock DB (`scripts/seed-mock.js`), start the server with `DEMO_MODE=true` on port 3001, run `scripts/screenshot.js`, stop the server.
+- Goal: a single `npm run screenshots` (or similar) that seeds, boots the demo server, waits for it to be ready, captures all screenshots, and shuts the server down.
+- Should be idempotent and safe to run on a clean checkout. Fail loudly if Playwright isn't installed.
+- Follow-up: document the command in `README.md` and reference it from `docs/testing.md` under the demo/mock coverage backlog.
+
 ### Top bar — active language indicator
 
 - Show the flag/icon of the currently active Duolingo course in the nav bar
@@ -64,3 +71,4 @@
 - `strength` and `learned` fields in legacy API may have data for old-path accounts; confirmed 0/false for new-path accounts (like this one). Track whether a new-path alternative exists.
 - Potential starting points: `GET /api/1/dictionary_page`, `/words/hints/{from}/{to}`, `currentCourse` fields from `/2017-06-30/users/{userId}`
 - Feed findings back into api-map.md
+

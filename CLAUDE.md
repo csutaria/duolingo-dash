@@ -1,6 +1,6 @@
 @AGENTS.md
 
-**Where to look:** user setup, test commands, polling — **`README.md`**. Endpoint ↔ storage map — **`docs/api-map.md`**. Verifying external API behavior — **`AGENTS.md`** (Verification).
+**Where to look:** user setup and user-visible behavior — `**README.md`**. Runtime structure (polling, pause, sync pipeline, internal API routes, `sync_log` schema) — `**docs/architecture.md`**. Duolingo endpoint ↔ storage map and cross-cutting API caveats — `**docs/api-map.md**`. Running tests — `**TESTING.md**`. Test coverage, conventions, and backlog — `**docs/testing.md**`. Verifying external API behavior — `**AGENTS.md**` (Verification).
 
 ## Build & Test
 
@@ -25,8 +25,9 @@ npx jest <name>      # Run specific test file
 - **Unofficial API** — no docs, no guarantees. Reverse-engineered from web traffic.
 - The `2017-06-30` versioned path is stable but endpoints can be removed without notice.
 - `/vocabulary/overview` is dead (~2024). Vocab is extracted from skill word lists via the legacy endpoint.
-- Legacy `/users/{username}` requires **username**, not numeric user ID. Legacy **`language_data`** keys may not match **`courses[].learningLanguage`** — skill sync uses **`src/lib/legacy-language-data.ts`**; semantics in **`docs/api-map.md`** (§⑤, Local SQLite).
+- Legacy `/users/{username}` requires **username**, not numeric user ID. Legacy `**language_data`** keys may not match `**courses[].learningLanguage`** — skill sync uses `**src/lib/legacy-language-data.ts**`; semantics in `**docs/api-map.md**` (§⑤, Local SQLite).
 - Duolingo avatar URLs need a size suffix (`/xlarge`) to be publicly accessible. Base URLs return 403.
 - XP summary entries from the API can have null fields — always default to safe values before DB insert.
 - Course switching (`PATCH /users/{id}`) is **account-wide** — it changes the user's active language in the real Duolingo app.
 - Rate limiting is CAPTCHA-based (403 + `blockScript`), not 429.
+
