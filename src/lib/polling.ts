@@ -1,5 +1,6 @@
 import { DuolingoClient } from "./duolingo";
 import { quickCheck, fullSync, SyncResult } from "./sync";
+import { getCurrentSync } from "./sync-state";
 
 const POLL_INTERVAL_MS = 15 * 60 * 1000;
 const ALL_COURSE_INTERVAL_MS = 3 * 60 * 60 * 1000;
@@ -59,11 +60,20 @@ export function startPolling(client: DuolingoClient): void {
 
   allCourseTimer = setInterval(() => allCourseSync(client), ALL_COURSE_INTERVAL_MS);
 
-  pollOnce(client)
-    .then((r) => {
-      lastSyncResult = r;
-    })
-    .catch(() => {});
+  // Skip the kickoff if a sync is already in flight (e.g. resume during sync)
+  // so we don't spawn a concurrent fullSync. The next interval tick will
+  // handle any genuinely new work.
+  if (!isRunning && getCurrentSync() == null) {
+    isRunning = true;
+    pollOnce(client)
+      .then((r) => {
+        lastSyncResult = r;
+      })
+      .catch(() => {})
+      .finally(() => {
+        isRunning = false;
+      });
+  }
 }
 
 export function stopPolling(): void {
