@@ -16,6 +16,11 @@ export default function XpHistory() {
   const [range, setRange] = useState("30");
   const params = range ? { days: range } : undefined;
   const { data: xpDaily, loading } = useData<Array<Record<string, unknown>>>("xp-daily", params);
+  const xpDomainStart = range ? (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - Number(range));
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12).getTime();
+  })() : undefined;
   const { data: xpStats } = useData<Record<string, unknown>>("xp-stats");
 
   const filteredStats = xpDaily
@@ -61,7 +66,7 @@ export default function XpHistory() {
 
       {xpDaily && xpDaily.length > 0 && (
         <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-          <XpChart data={xpDaily} height={400} />
+          <XpChart data={xpDaily} height={400} domainStart={xpDomainStart} />
         </div>
       )}
 

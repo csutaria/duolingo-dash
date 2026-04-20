@@ -73,10 +73,21 @@ export default function CourseDetail({ params }: { params: Promise<{ courseId: s
   const scriptSkills = skills?.filter((s) => isScriptSkill(String(s.skill_name), langCode)) ?? [];
   const contentSkills = skills?.filter((s) => !isScriptSkill(String(s.skill_name), langCode)) ?? [];
 
-  const xpHistory = courseHistory?.map((h) => ({
-    date: String(h.snapshot_time),
-    xp: Number(h.xp),
-  })) ?? [];
+  const [xpRange, setXpRange] = useState("30");
+  const xpCutoff = xpRange ? Date.now() - Number(xpRange) * 86_400_000 : undefined;
+  const xpDomainStart = xpRange ? (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - Number(xpRange));
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12).getTime();
+  })() : undefined;
+  const xpHistory = (() => {
+    const all = courseHistory?.map((h) => ({
+      date: String(h.snapshot_time),
+      xp: Number(h.xp),
+    })) ?? [];
+    if (!xpCutoff) return all;
+    return all.filter((h) => new Date(h.date).getTime() >= xpCutoff);
+  })();
 
   const tabs = [
     { id: "skills" as const, label: "Skills" },
@@ -129,9 +140,19 @@ export default function CourseDetail({ params }: { params: Promise<{ courseId: s
 
       {xpHistory.length > 1 && (
         <section>
-          <h3 className="text-lg font-semibold mb-3">XP Over Time</h3>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg font-semibold">XP Over Time</h3>
+            <div className="flex gap-1">
+              {[{label:"7d",days:"7"},{label:"30d",days:"30"},{label:"90d",days:"90"},{label:"All",days:""}].map((r) => (
+                <button key={r.days} onClick={() => setXpRange(r.days)}
+                  className={`px-2 py-1 rounded text-xs transition-colors ${xpRange === r.days ? "bg-zinc-700 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800"}`}>
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-            <XpChart data={xpHistory} dataKey="xp" height={200} />
+            <XpChart data={xpHistory} dataKey="xp" height={200} domainStart={xpDomainStart} />
           </div>
         </section>
       )}
