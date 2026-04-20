@@ -68,6 +68,29 @@ export function useSync() {
   return { sync, syncing, result };
 }
 
+export function usePollingControl() {
+  const [pending, setPending] = useState(false);
+
+  const setPaused = useCallback(async (paused: boolean) => {
+    setPending(true);
+    try {
+      const res = await fetch("/api/polling", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: paused ? "pause" : "resume" }),
+      });
+      const data = await res.json();
+      return data as { paused?: boolean; polling?: boolean; error?: string };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : "Failed" };
+    } finally {
+      setPending(false);
+    }
+  }, []);
+
+  return { setPaused, pending };
+}
+
 export function useStatus() {
   const [status, setStatus] = useState<Record<string, unknown> | null>(null);
 

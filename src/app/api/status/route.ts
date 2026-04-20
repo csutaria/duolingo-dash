@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getClientOrNull } from "@/lib/server-state";
+import { getClientOrNull, isUserPaused } from "@/lib/server-state";
 import {
   getLastSyncResult,
   isPolling,
@@ -23,6 +23,7 @@ export async function GET() {
   return NextResponse.json({
     authenticated: client !== null,
     polling: isPolling(),
+    paused: isUserPaused(),
     currentlyRunning: isCurrentlyRunning(),
     lastSyncResult: syncResult,
     dbStatus,
