@@ -94,21 +94,23 @@ export function usePollingControl() {
 export function useStatus() {
   const [status, setStatus] = useState<Record<string, unknown> | null>(null);
 
-  useEffect(() => {
+  const fetchStatus = useCallback(() => {
     fetch("/api/status")
       .then((r) => r.json())
       .then(setStatus)
       .catch(() => {});
-
-    const interval = setInterval(() => {
-      fetch("/api/status")
-        .then((r) => r.json())
-        .then(setStatus)
-        .catch(() => {});
-    }, 5000);
-
-    return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 5000);
+    return () => clearInterval(interval);
+  }, [fetchStatus]);
+
+  useEffect(() => {
+    window.addEventListener(SYNC_COMPLETE_EVENT, fetchStatus);
+    return () => window.removeEventListener(SYNC_COMPLETE_EVENT, fetchStatus);
+  }, [fetchStatus]);
 
   return status;
 }

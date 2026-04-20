@@ -43,13 +43,15 @@ function SyncStatusPanel({
 }) {
   const stateLabel = !authenticated
     ? { text: "Not connected", color: "text-red-400" }
-    : paused
-      ? { text: "Paused", color: "text-red-400" }
-      : !pollingOn
-        ? { text: "Polling off", color: "text-red-400" }
-        : currentlyRunning
-          ? { text: "Syncing now…", color: "text-yellow-400" }
-          : { text: "Idle — polls every 15m", color: "text-green-400" };
+    : paused && currentlyRunning
+      ? { text: "Paused — syncing now…", color: "text-yellow-400" }
+      : paused
+        ? { text: "Paused", color: "text-red-400" }
+        : !pollingOn
+          ? { text: "Polling off", color: "text-red-400" }
+          : currentlyRunning
+            ? { text: "Syncing now…", color: "text-yellow-400" }
+            : { text: "Idle — polls every 15m", color: "text-green-400" };
 
   const pollMin = msUntilNextPoll != null ? ceilMin(msUntilNextPoll) : null;
   const allCourseMin = msUntilNextAllCourseSync != null ? ceilMin(msUntilNextAllCourseSync) : null;
@@ -211,11 +213,13 @@ export function SyncBar() {
     (status?.msUntilNextAllCourseSync as number | null) ?? null;
 
   const indicatorColor =
-    !status || !authenticated || paused || !pollingOn
+    !status || !authenticated
       ? "text-red-500"
       : currentlyRunning
         ? "text-yellow-400"
-        : "text-green-500";
+        : paused || !pollingOn
+          ? "text-red-500"
+          : "text-green-500";
 
   const nextPollMin =
     msUntilNextPoll != null ? Math.max(0, Math.ceil(msUntilNextPoll / 60_000)) : null;
@@ -224,15 +228,17 @@ export function SyncBar() {
     ? "Initializing…"
     : !authenticated
       ? "Not connected"
-      : paused
-        ? "Paused"
-        : !pollingOn
-          ? "Polling off"
-          : currentlyRunning
-            ? "Syncing…"
-            : nextPollMin != null && nextPollMin > 0
-              ? `Poll in ~${nextPollMin}m`
-              : "Polling";
+      : paused && currentlyRunning
+        ? "Paused · Syncing…"
+        : paused
+          ? "Paused"
+          : !pollingOn
+            ? "Polling off"
+            : currentlyRunning
+              ? "Syncing…"
+              : nextPollMin != null && nextPollMin > 0
+                ? `Poll in ~${nextPollMin}m`
+                : "Polling";
 
   if (demoMode) {
     return (
