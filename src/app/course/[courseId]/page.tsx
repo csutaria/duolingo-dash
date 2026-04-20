@@ -182,8 +182,9 @@ export default function CourseDetail({ params }: { params: Promise<{ courseId: s
 }
 
 function crownStatus(levelsFinished: number): { label: string; classes: string } {
-  if (levelsFinished >= 5) return { label: "Completed", classes: "bg-green-900/50 text-green-400" };
-  if (levelsFinished >= 1) return { label: `♛ ${levelsFinished}/5`, classes: "bg-yellow-900/40 text-yellow-400" };
+  if (levelsFinished >= 5) return { label: "Legendary", classes: "bg-yellow-900/50 text-yellow-300" };
+  if (levelsFinished >= 4) return { label: "Completed", classes: "bg-green-900/50 text-green-400" };
+  if (levelsFinished >= 1) return { label: "In Progress", classes: "bg-blue-900/40 text-blue-400" };
   return { label: "Not started", classes: "bg-zinc-800 text-zinc-500" };
 }
 

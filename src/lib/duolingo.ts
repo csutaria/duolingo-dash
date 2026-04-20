@@ -3,6 +3,7 @@ import {
   XpSummary,
   VocabOverview,
   LegacyUserData,
+  PathSection,
 } from "./types";
 
 const BASE_URL = "https://www.duolingo.com";
@@ -101,7 +102,21 @@ export class DuolingoClient {
 
   async getUser(): Promise<DuolingoUser> {
     const url = `${API_PREFIX}/users/${this.userId}?fields=${USER_FIELDS}`;
-    return this.request<DuolingoUser>(url);
+    const user = await this.request<DuolingoUser>(url);
+    // Duolingo stopped returning learningLanguage/fromLanguage in the courses array.
+    // Parse them from the course ID (format: DUOLINGO_{LANG}_{FROM}).
+    user.courses = (user.courses ?? []).map((c) => {
+      if (c.learningLanguage && c.fromLanguage) return c;
+      const withoutPrefix = c.id.replace(/^DUOLINGO_/, "");
+      const lastUnderscore = withoutPrefix.lastIndexOf("_");
+      if (lastUnderscore === -1) return c;
+      return {
+        ...c,
+        learningLanguage: c.learningLanguage || withoutPrefix.slice(0, lastUnderscore).toLowerCase(),
+        fromLanguage: c.fromLanguage || withoutPrefix.slice(lastUnderscore + 1).toLowerCase(),
+      };
+    });
+    return user;
   }
 
   async getTotalXp(): Promise<number> {
@@ -167,6 +182,12 @@ export class DuolingoClient {
     const deduped = [...new Set(extraFields)].join(",");
     const url = `${API_PREFIX}/users/${this.userId}?fields=${deduped}`;
     return this.request<unknown>(url);
+  }
+
+  async getPathSectioned(): Promise<PathSection[]> {
+    const url = `${API_PREFIX}/users/${this.userId}?fields=currentCourse%7BpathSectioned%7D`;
+    const data = await this.request<{ currentCourse?: { pathSectioned?: PathSection[] } }>(url);
+    return data.currentCourse?.pathSectioned ?? [];
   }
 
   async getMistakeCount(courseId: string): Promise<number> {

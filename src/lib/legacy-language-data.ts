@@ -6,6 +6,8 @@ const LANGUAGE_DATA_ALIASES: Record<string, readonly string[]> = {
   no: ["nb"],
   zh: ["zs"],
   zs: ["zh"],
+  "zh-cn": ["zs", "zh"],  // course ID parses to zh-cn; legacy uses zs or zh
+  "no-bo": ["nb", "no"],  // course ID parses to no-bo; legacy uses nb or no
 };
 
 export type ResolvedLegacyLanguage = {

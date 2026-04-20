@@ -122,6 +122,31 @@ export interface LegacyLanguageData {
   current_learning: boolean;
 }
 
+export type PathLevelState = "legendary" | "passed" | "active" | "locked" | "unit_test";
+
+export interface PathLevel {
+  id: string;
+  type: string;
+  state: PathLevelState;
+  finishedSessions: number;
+  totalSessions: number;
+  pathLevelClientData?: {
+    skillId?: string;
+    teachingObjective?: string;
+  };
+}
+
+export interface PathUnit {
+  unitIndex: number;
+  levels: PathLevel[];
+  teachingObjective?: string;
+}
+
+export interface PathSection {
+  id: string;
+  units: PathUnit[];
+}
+
 export interface LegacyUserData {
   username: string;
   language_data: Record<string, LegacyLanguageData>;

@@ -1,4 +1,5 @@
 import { DuolingoClient } from "./duolingo";
+import type { PathSection } from "./types";
 import {
   getDb,
   getLastSyncXp,
@@ -189,6 +190,53 @@ async function syncAllCourseDetails(client: DuolingoClient, user: DuolingoUser):
   }
 }
 
+/**
+ * Maps skillId → levels_finished (0–5) from path section data.
+ * 5 = all nodes done with at least one legendary
+ * 4 = all nodes done, none legendary
+ * 1–3 = partial (ceil of completion ratio × 3), min 1 if any active
+ * 0 = not started
+ */
+function buildPathProgressMap(sections: PathSection[]): Map<string, number> {
+  type SkillStats = { legendary: number; passed: number; active: number; total: number };
+  const stats = new Map<string, SkillStats>();
+
+  for (const section of sections) {
+    for (const unit of section.units) {
+      for (const level of unit.levels) {
+        if (level.type === "unit_test") continue;
+        const skillId = level.pathLevelClientData?.skillId;
+        if (!skillId) continue;
+        const s = stats.get(skillId) ?? { legendary: 0, passed: 0, active: 0, total: 0 };
+        s.total++;
+        if (level.state === "legendary") s.legendary++;
+        else if (level.state === "passed") s.passed++;
+        else if (level.state === "active") s.active++;
+        stats.set(skillId, s);
+      }
+    }
+  }
+
+  const result = new Map<string, number>();
+  for (const [skillId, s] of stats) {
+    const complete = s.legendary + s.passed;
+    let score: number;
+    if (complete === s.total && s.legendary > 0) {
+      score = 5;
+    } else if (complete === s.total) {
+      score = 4;
+    } else if (complete > 0) {
+      score = Math.max(1, Math.ceil((complete / s.total) * 3));
+    } else if (s.active > 0) {
+      score = 1;
+    } else {
+      score = 0;
+    }
+    result.set(skillId, score);
+  }
+  return result;
+}
+
 async function saveLanguageDetails(client: DuolingoClient, courseId: string, learningLanguage: string): Promise<void> {
   try {
     const vocab = await client.getVocabulary();
@@ -211,7 +259,11 @@ async function saveLanguageDetails(client: DuolingoClient, courseId: string, lea
   }
 
   try {
-    const legacy = await client.getLegacyUser();
+    const [legacy, pathSections] = await Promise.all([
+      client.getLegacyUser(),
+      client.getPathSectioned().catch(() => []),
+    ]);
+    const pathProgress = buildPathProgressMap(pathSections);
     const langData = resolveLegacyLanguageData(legacy, learningLanguage);
     if (langData?.skills) {
       snapshotSkills(
@@ -222,7 +274,7 @@ async function saveLanguageDetails(client: DuolingoClient, courseId: string, lea
           learned: s.learned,
           strength: s.strength ?? 0,
           words: s.words ?? [],
-          levels_finished: s.levels_finished ?? s.finishedLevels ?? 0,
+          levels_finished: pathProgress.get(s.id) ?? s.levels_finished ?? s.finishedLevels ?? 0,
           coords_x: s.coords_x ?? 0,
           coords_y: s.coords_y ?? 0,
           dependencies: s.dependencies ?? [],
