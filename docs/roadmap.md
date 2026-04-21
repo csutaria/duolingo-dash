@@ -21,12 +21,12 @@
 - Show the flag/icon of the currently active Duolingo course in the nav bar
 - Source: `user_profile.learning_language` from DB (updated on each sync)
 
-### XP over time — per-language breakdown
+### XP over time — per-language breakdown **[in progress]**
 
-- **Chart:** stacked area chart showing XP contribution per language over time (currently all languages are summed into one daily total)
-- **Incremental XP list:** tag each XP entry with the language it came from
-- **Blocker:** Duolingo's XP summaries API (endpoint ③) returns account-wide daily totals with no per-language breakdown. This may require inferring language from course XP deltas between snapshots (coarse), or finding an alternative endpoint
-- See [api-map.md](api-map.md) for endpoint details
+- **Chart:** stacked cumulative area chart on overview page, one band per language, sourced from `course_snapshots` (not `xp_daily` which has no per-language breakdown). Overlays: (1) total XP curve — `max(xp_daily backward reconstruction, sum of course snapshot values)` at each date; (2) flat `profile.total_xp` reference line as ceiling.
+- **Blocker resolved:** per-language XP is inferred from cumulative `course_snapshots.total_xp` rather than from endpoint ③ (which remains account-wide only). Per-language daily incremental breakdown is still not possible from available endpoints.
+- **Color indicators:** course cards on overview get a colored dot matching their chart band; dot hidden when language has no data in the selected window.
+- **Incremental XP list:** not planned in this pass — endpoint ③ still returns no per-language daily breakdown.
 
 ### Light mode UI
 

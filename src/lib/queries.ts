@@ -178,6 +178,96 @@ export function getSkillDecay(courseId: string) {
   `).all(courseId, courseId, courseId) as Array<Record<string, unknown>>;
 }
 
+export function getCourseXpHistory(days?: number): Array<Record<string, unknown>> {
+  const db = getDb();
+
+  const toDateStr = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
+
+  const today = new Date();
+  const todayStr = toDateStr(today);
+
+  // Determine window start date
+  let startStr: string;
+  if (days) {
+    const s = new Date(today);
+    s.setDate(s.getDate() - days);
+    startStr = toDateStr(s);
+  } else {
+    const row = db.prepare(
+      "SELECT MIN(DATE(snapshot_time)) as d FROM course_snapshots"
+    ).get() as { d: string | null };
+    if (!row?.d) return [];
+    startStr = row.d;
+  }
+
+  // All distinct course IDs — alphabetical for stable color assignment
+  const courseIds = (
+    db.prepare(
+      "SELECT DISTINCT course_id FROM course_snapshots ORDER BY course_id"
+    ).all() as Array<{ course_id: string }>
+  ).map((r) => r.course_id);
+
+  if (courseIds.length === 0) return [];
+
+  // Baseline: last known xp per course strictly before the window start
+  const lastKnown: Record<string, number> = {};
+  if (days) {
+    (
+      db.prepare(`
+        SELECT cs.course_id, cs.xp
+        FROM course_snapshots cs
+        INNER JOIN (
+          SELECT course_id, MAX(snapshot_time) as max_t
+          FROM course_snapshots
+          WHERE DATE(snapshot_time) < ?
+          GROUP BY course_id
+        ) pre ON cs.course_id = pre.course_id AND cs.snapshot_time = pre.max_t
+      `).all(startStr) as Array<{ course_id: string; xp: number }>
+    ).forEach((b) => { lastKnown[b.course_id] = b.xp; });
+  }
+
+  // All snapshots from startStr onward — dedup to last per (course_id, date)
+  const byDay = new Map<string, number>();
+  (
+    db.prepare(`
+      SELECT course_id, DATE(snapshot_time) as date, xp
+      FROM course_snapshots
+      WHERE DATE(snapshot_time) >= ?
+      ORDER BY snapshot_time ASC
+    `).all(startStr) as Array<{ course_id: string; date: string; xp: number }>
+  ).forEach((r) => { byDay.set(`${r.course_id}\0${r.date}`, r.xp); });
+
+  // Walk date range, forward-filling each course's last known value
+  const result: Array<Record<string, unknown>> = [];
+  const cur = new Date(`${startStr}T12:00:00`);
+  const endMs = new Date(`${todayStr}T12:00:00`).getTime();
+
+  while (cur.getTime() <= endMs) {
+    const date = toDateStr(cur);
+    for (const courseId of courseIds) {
+      const val = byDay.get(`${courseId}\0${date}`);
+      if (val !== undefined) lastKnown[courseId] = val;
+    }
+    const row: Record<string, unknown> = { date };
+    let total = 0;
+    for (const courseId of courseIds) {
+      const val = lastKnown[courseId] ?? 0;
+      row[courseId] = val;
+      total += val;
+    }
+    row._total = total;
+    result.push(row);
+    cur.setDate(cur.getDate() + 1);
+  }
+
+  return result;
+}
+
 export function getAchievements() {
   const db = getDb();
   return db.prepare("SELECT * FROM achievements ORDER BY is_completed DESC, name ASC").all() as Array<Record<string, unknown>>;

@@ -5,6 +5,7 @@ import {
   getCourseLatest,
   getCourseHistory,
   getCourseComparison,
+  getCourseXpHistory,
   getXpDaily,
   getXpStats,
   getVocabLatest,
@@ -47,6 +48,11 @@ export async function GET(request: NextRequest) {
         const courseId = searchParams.get("courseId");
         if (!courseId) return NextResponse.json({ error: "courseId required" }, { status: 400 });
         return NextResponse.json(getCourseHistory(courseId));
+      }
+
+      case "course-xp-history": {
+        const days = searchParams.get("days");
+        return NextResponse.json(getCourseXpHistory(days ? parseInt(days) : undefined));
       }
 
       case "xp-daily": {

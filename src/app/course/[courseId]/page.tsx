@@ -143,7 +143,7 @@ export default function CourseDetail({ params }: { params: Promise<{ courseId: s
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-lg font-semibold">XP Over Time</h3>
             <div className="flex gap-1">
-              {[{label:"7d",days:"7"},{label:"30d",days:"30"},{label:"90d",days:"90"},{label:"All",days:""}].map((r) => (
+              {[{label:"1d",days:"1"},{label:"7d",days:"7"},{label:"30d",days:"30"},{label:"90d",days:"90"},{label:"All",days:""}].map((r) => (
                 <button key={r.days} onClick={() => setXpRange(r.days)}
                   className={`px-2 py-1 rounded text-xs transition-colors ${xpRange === r.days ? "bg-zinc-700 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800"}`}>
                   {r.label}

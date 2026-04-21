@@ -6,6 +6,7 @@ import { StatCard } from "@/components/StatCard";
 import { XpChart } from "@/components/XpChart";
 
 const RANGES = [
+  { label: "1 day", days: "1" },
   { label: "7 days", days: "7" },
   { label: "30 days", days: "30" },
   { label: "90 days", days: "90" },
@@ -44,7 +45,7 @@ export default function XpHistory() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold">XP History</h2>
+        <h2 className="text-xl font-bold">Daily XP History</h2>
         <div className="flex gap-1">
           {RANGES.map((r) => (
             <button
@@ -67,6 +68,7 @@ export default function XpHistory() {
       {xpDaily && xpDaily.length > 0 && (
         <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
           <XpChart data={xpDaily} height={400} domainStart={xpDomainStart} />
+          <p className="text-xs text-zinc-600 mt-1">Daily XP gained across all languages</p>
         </div>
       )}
 

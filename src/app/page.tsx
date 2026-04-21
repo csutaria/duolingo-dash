@@ -1,15 +1,59 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import { useData } from "@/lib/hooks";
 import { StatCard } from "@/components/StatCard";
 import { CourseCard } from "@/components/CourseCard";
-import { XpChart } from "@/components/XpChart";
+import { StackedXpChart } from "@/components/StackedXpChart";
+import { assignCourseColors } from "@/lib/colors";
+
+const XP_RANGES = [
+  { label: "1d", days: "1" },
+  { label: "7d", days: "7" },
+  { label: "30d", days: "30" },
+  { label: "90d", days: "90" },
+  { label: "All", days: "" },
+];
 
 export default function Overview() {
   const { data: profile, loading: pLoading } = useData<Record<string, unknown>>("profile");
   const { data: courses } = useData<Array<Record<string, unknown>>>("course-comparison");
-  const { data: xpDaily } = useData<Array<Record<string, unknown>>>("xp-daily", { days: "30" });
   const { data: xpStats } = useData<Record<string, unknown>>("xp-stats");
+  const [xpRange, setXpRange] = useState("30");
+  const { data: stackData } = useData<Array<Record<string, unknown>>>(
+    "course-xp-history",
+    xpRange ? { days: xpRange } : undefined
+  );
+
+  const profileTotalXp = profile ? Number(profile.total_xp) : 0;
+
+  const courseIds = useMemo(() => {
+    if (!stackData?.length) return [];
+    return Object.keys(stackData[0]).filter((k) => k !== "date" && k !== "_total");
+  }, [stackData]);
+
+  const colorMap = useMemo(() => assignCourseColors(courseIds), [courseIds.join(",")]);
+
+  const activeInWindow = useMemo(() => {
+    if (!stackData || stackData.length < 2) return new Set<string>();
+    const first = stackData[0];
+    const last = stackData[stackData.length - 1];
+    return new Set(courseIds.filter((id) => Number(last[id] ?? 0) > Number(first[id] ?? 0)));
+  }, [stackData, courseIds]);
+
+  const xpDomainStart = xpRange ? (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - Number(xpRange));
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12).getTime();
+  })() : undefined;
+
+  const courseNames = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const c of courses ?? []) {
+      map[String(c.course_id)] = String(c.title || c.learning_language);
+    }
+    return map;
+  }, [courses]);
 
   if (pLoading && !profile) {
     return <div className="text-zinc-500">Loading...</div>;
@@ -114,11 +158,35 @@ export default function Overview() {
         </div>
       </section>
 
-      {xpDaily && xpDaily.length > 0 && (
+      {stackData && stackData.length > 0 && (
         <section>
-          <h3 className="text-lg font-semibold mb-3">XP — Last 30 Days</h3>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg font-semibold">XP History</h3>
+            <div className="flex gap-1">
+              {XP_RANGES.map((r) => (
+                <button
+                  key={r.days}
+                  onClick={() => setXpRange(r.days)}
+                  className={`px-2 py-1 rounded text-xs transition-colors ${
+                    xpRange === r.days
+                      ? "bg-zinc-700 text-zinc-100"
+                      : "text-zinc-400 hover:bg-zinc-800"
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-            <XpChart data={xpDaily} />
+            <StackedXpChart
+              data={stackData}
+              courseIds={courseIds}
+              colors={colorMap}
+              courseNames={courseNames}
+              profileTotalXp={profileTotalXp}
+              domainStart={xpDomainStart}
+            />
           </div>
         </section>
       )}
@@ -126,21 +194,25 @@ export default function Overview() {
       <section>
         <h3 className="text-lg font-semibold mb-3">Languages</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {courses?.map((c) => (
-            <CourseCard
-              key={String(c.course_id)}
-              courseId={String(c.course_id)}
-              learningLanguage={String(c.learning_language)}
-              fromLanguage={String(c.from_language)}
-              title={String(c.title)}
-              xp={Number(c.xp)}
-              totalCrowns={c.total_crowns != null ? Number(c.total_crowns) : undefined}
-              wordCount={c.word_count != null ? Number(c.word_count) : undefined}
-              totalSkills={c.total_skills != null ? Number(c.total_skills) : undefined}
-              completedSkills={c.completed_skills != null ? Number(c.completed_skills) : undefined}
-              inProgressSkills={c.in_progress_skills != null ? Number(c.in_progress_skills) : undefined}
-            />
-          ))}
+          {courses?.map((c) => {
+            const cId = String(c.course_id);
+            return (
+              <CourseCard
+                key={cId}
+                courseId={cId}
+                learningLanguage={String(c.learning_language)}
+                fromLanguage={String(c.from_language)}
+                title={String(c.title)}
+                xp={Number(c.xp)}
+                totalCrowns={c.total_crowns != null ? Number(c.total_crowns) : undefined}
+                wordCount={c.word_count != null ? Number(c.word_count) : undefined}
+                totalSkills={c.total_skills != null ? Number(c.total_skills) : undefined}
+                completedSkills={c.completed_skills != null ? Number(c.completed_skills) : undefined}
+                inProgressSkills={c.in_progress_skills != null ? Number(c.in_progress_skills) : undefined}
+                indicatorColor={activeInWindow.has(cId) ? colorMap[cId] : undefined}
+              />
+            );
+          })}
         </div>
       </section>
     </div>

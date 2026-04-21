@@ -13,6 +13,7 @@ interface CourseCardProps {
   totalSkills?: number;
   completedSkills?: number;
   inProgressSkills?: number;
+  indicatorColor?: string;
 }
 
 export function CourseCard({
@@ -25,6 +26,7 @@ export function CourseCard({
   totalSkills,
   completedSkills,
   inProgressSkills,
+  indicatorColor,
 }: CourseCardProps) {
   const flag = getLanguageFlag(learningLanguage);
   const name = title || getLanguageName(learningLanguage);
@@ -41,7 +43,7 @@ export function CourseCard({
   return (
     <Link
       href={`/course/${encodeURIComponent(courseId)}`}
-      className="block bg-zinc-900 border border-zinc-800 rounded-lg p-5 hover:border-zinc-600 transition-colors"
+      className="relative block bg-zinc-900 border border-zinc-800 rounded-lg p-5 hover:border-zinc-600 transition-colors"
     >
       <div className="flex items-start justify-between">
         <div>
@@ -58,6 +60,12 @@ export function CourseCard({
           <div className="text-xs text-zinc-500">XP</div>
         </div>
       </div>
+      {indicatorColor && (
+        <span
+          className="absolute bottom-3 right-3 w-2.5 h-2.5 rounded-full"
+          style={{ backgroundColor: indicatorColor }}
+        />
+      )}
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm text-zinc-400">
         {totalCrowns != null && totalCrowns > 0 && (
           <span>♛ {totalCrowns.toLocaleString()}</span>

@@ -61,6 +61,14 @@ Planned tests, grouped by surface. Roughly priority-ordered within each group. I
 - [x] `polling.ts` kickoff guard — regression for commit `84935f3`: `shouldKickoffPoll({isRunning, currentSync})` returns false when either guard is set. Predicate extracted from the inline condition in `startPolling`; behavior unchanged. (`polling.test.ts`)
 - [x] `fullSync` clears `currentSync` in a `finally` even when the call throws. Error path only (see `fullsync-instrumentation.test.ts` header for scope rationale): asserts `currentSync.type` during the in-flight call is `single`/`cycle` as expected, is `null` after the call returns, and that `logSync` receives the right error metadata. Success path is structurally protected by the same finally and is planned alongside path-based skill progress fixtures. (`fullsync-instrumentation.test.ts`)
 
+### Stacked XP chart — data logic (`course-xp-history`)
+
+Core of the feature is non-trivial JS computation in `getCourseXpHistory` (in `queries.ts`). UI is intentionally untested; the data layer is not.
+
+- `getCourseXpHistory` forward-fill — given sparse snapshots per course, each date in the range should carry the most recent prior `total_xp` for that course, not zero.
+- `_total` per date — sum of all forward-filled course values at that date; verify it equals the stack top and does not mix in `profile.total_xp` or `xp_daily` cumulative sums.
+- Edge cases: no snapshots for a course in the window (course shouldn't appear); single snapshot (forward-fill to end of range); xp_daily gap for a date (treat as 0 gained).
+
 ### Path-based skill progress (`94e3fab`)
 
 Not in this push. Add when we revisit the path-sectioned sync path.
