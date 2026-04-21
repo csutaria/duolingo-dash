@@ -268,9 +268,121 @@ export function getCourseXpHistory(days?: number): Array<Record<string, unknown>
   return result;
 }
 
+export function getCourseXpDailyHistory(days?: number): Array<Record<string, unknown>> {
+  const db = getDb();
+
+  const toDateStr = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
+
+  const today = new Date();
+  const todayStr = toDateStr(today);
+
+  let startStr: string;
+  if (days) {
+    const s = new Date(today);
+    s.setDate(s.getDate() - days);
+    startStr = toDateStr(s);
+  } else {
+    const row = db.prepare(
+      "SELECT MIN(DATE(snapshot_time)) as d FROM course_snapshots"
+    ).get() as { d: string | null };
+    if (!row?.d) return [];
+    startStr = row.d;
+  }
+
+  const courseIds = (
+    db.prepare(
+      "SELECT DISTINCT course_id FROM course_snapshots ORDER BY course_id"
+    ).all() as Array<{ course_id: string }>
+  ).map((r) => r.course_id);
+
+  if (courseIds.length === 0) return [];
+
+  // Baseline: last known xp per course strictly before the window start
+  const lastKnown: Record<string, number | undefined> = {};
+  if (days) {
+    (
+      db.prepare(`
+        SELECT cs.course_id, cs.xp
+        FROM course_snapshots cs
+        INNER JOIN (
+          SELECT course_id, MAX(snapshot_time) as max_t
+          FROM course_snapshots
+          WHERE DATE(snapshot_time) < ?
+          GROUP BY course_id
+        ) pre ON cs.course_id = pre.course_id AND cs.snapshot_time = pre.max_t
+      `).all(startStr) as Array<{ course_id: string; xp: number }>
+    ).forEach((b) => { lastKnown[b.course_id] = b.xp; });
+  }
+
+  // Last xp per (course_id, date) within the window — dedup to last snapshot per day
+  const snapsByDay = new Map<string, number>();
+  (
+    db.prepare(`
+      SELECT course_id, DATE(snapshot_time) as date, xp
+      FROM course_snapshots
+      WHERE DATE(snapshot_time) >= ?
+      ORDER BY snapshot_time ASC
+    `).all(startStr) as Array<{ course_id: string; date: string; xp: number }>
+  ).forEach((r) => { snapsByDay.set(`${r.course_id}\0${r.date}`, r.xp); });
+
+  // xp_daily totals for the window (authoritative daily total)
+  const xpDailyMap = new Map<string, number>();
+  const xpDailyRows = days
+    ? db.prepare("SELECT date, gained_xp FROM xp_daily WHERE date >= ? ORDER BY date ASC").all(startStr)
+    : db.prepare("SELECT date, gained_xp FROM xp_daily ORDER BY date ASC").all();
+  (xpDailyRows as Array<{ date: string; gained_xp: number }>).forEach((r) => {
+    xpDailyMap.set(r.date, r.gained_xp);
+  });
+
+  // Walk date range, computing per-course deltas and untracked gap
+  const result: Array<Record<string, unknown>> = [];
+  const cur = new Date(`${startStr}T12:00:00`);
+  const endMs = new Date(`${todayStr}T12:00:00`).getTime();
+
+  while (cur.getTime() <= endMs) {
+    const date = toDateStr(cur);
+    const row: Record<string, unknown> = { date };
+    let sumDeltas = 0;
+
+    for (const courseId of courseIds) {
+      const todayXp = snapsByDay.get(`${courseId}\0${date}`);
+      if (todayXp !== undefined) {
+        const prevXp = lastKnown[courseId];
+        const delta = prevXp !== undefined ? Math.max(0, todayXp - prevXp) : 0;
+        row[courseId] = delta;
+        sumDeltas += delta;
+        lastKnown[courseId] = todayXp;
+      } else {
+        row[courseId] = 0;
+      }
+    }
+
+    const dailyTotal = xpDailyMap.get(date) ?? 0;
+    row._untracked = Math.max(0, dailyTotal - sumDeltas);
+    row._total = dailyTotal;
+
+    result.push(row);
+    cur.setDate(cur.getDate() + 1);
+  }
+
+  return result;
+}
+
 export function getAchievements() {
   const db = getDb();
   return db.prepare("SELECT * FROM achievements ORDER BY is_completed DESC, name ASC").all() as Array<Record<string, unknown>>;
+}
+
+export function getStreakEpochs() {
+  const db = getDb();
+  return db
+    .prepare("SELECT * FROM streak_epochs ORDER BY streak_start_date ASC")
+    .all() as Array<Record<string, unknown>>;
 }
 
 export function getSyncStatus() {

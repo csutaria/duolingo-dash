@@ -62,12 +62,15 @@ Guards:
 
 1. `setCurrentSync("single" | "cycle")` — populates `sync-state` for UI/progress.
 2. Endpoint ① (`getUser`) → profile, course snapshots, XP daily history.
-3. Achievements, if present.
-4. Course detail:
+3. Streak epoch tracking — if `streakData.currentStreak.startDate` is present:
+  - `updateStreakEpochs(startDate, previousStreakLength)` — records streak start/end in `streak_epochs`. Skipped if `startDate >= today` (intra-day sync before first practice).
+  - `backfillImpliedFreeze(startDate)` — marks zero-XP days within the current streak window as `implied_freeze = 1` in `xp_daily` (covers days protected by a streak shield that weren't flagged `frozen` by Duolingo).
+4. Achievements, if present.
+5. Course detail:
   - `cycleAllCourses = false` → `saveLanguageDetails` for the active course only (endpoints ⑤, ⑦).
   - `cycleAllCourses = true` → `syncAllCourseDetails` cycles through every course via endpoint ⑥ (`PATCH /users/{id}`) — **this is account-wide and visible in the real Duolingo app**.
-5. `logSync({ syncType: "full", totalXp, success, durationMs, cycleAll })`.
-6. `clearCurrentSync()` in a `finally` — always clears, even on throw.
+6. `logSync({ syncType: "full", totalXp, success, durationMs, cycleAll })`.
+7. `clearCurrentSync()` in a `finally` — always clears, even on throw.
 
 The `durationMs` recorded here is what powers the progress bar (see below).
 

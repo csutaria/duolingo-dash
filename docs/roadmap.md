@@ -21,12 +21,12 @@
 - Show the flag/icon of the currently active Duolingo course in the nav bar
 - Source: `user_profile.learning_language` from DB (updated on each sync)
 
-### XP over time — per-language breakdown **[in progress]**
+### XP over time — per-language breakdown **[shipped]**
 
-- **Chart:** stacked cumulative area chart on overview page, one band per language, sourced from `course_snapshots` (not `xp_daily` which has no per-language breakdown). Overlays: (1) total XP curve — `max(xp_daily backward reconstruction, sum of course snapshot values)` at each date; (2) flat `profile.total_xp` reference line as ceiling.
-- **Blocker resolved:** per-language XP is inferred from cumulative `course_snapshots.total_xp` rather than from endpoint ③ (which remains account-wide only). Per-language daily incremental breakdown is still not possible from available endpoints.
-- **Color indicators:** course cards on overview get a colored dot matching their chart band; dot hidden when language has no data in the selected window.
-- **Incremental XP list:** not planned in this pass — endpoint ③ still returns no per-language daily breakdown.
+- **Overview page:** daily stacked bar chart (`DailyXpBarChart`) — per-language XP deltas inferred from day-over-day `course_snapshots.xp` diffs. An `_untracked` segment fills the gap between language deltas and `xp_daily.gained_xp` when snapshot coverage is incomplete. Cards sorted: active-in-window first (by window XP desc), then inactive (by total XP desc).
+- **History page** (formerly "XP History"): cumulative stacked area chart (`StackedXpChart`). Compact stat cards with period label. Language cards with streak-window dots. "Streak Details" section: selectable time/sessions area chart with per-day background coloring (fire = streak extended, ice = frozen or implied-frozen, gray = no streak). Blue/red dashed reference lines mark known streak start/end dates from `streak_epochs`.
+- **Color palette:** alphabetical-by-course-id assignment from the full course list, shared across both pages — a course always maps to the same color.
+- **Limitation:** per-language daily XP is an approximation (snapshot deltas, not direct API data). Days with no snapshot for a language show 0 delta regardless of actual practice. Endpoint ③ remains account-wide only.
 
 ### Light mode UI
 

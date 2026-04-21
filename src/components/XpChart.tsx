@@ -66,6 +66,7 @@ export function XpChart({ data, dataKey = "gained_xp", height = 300, domainStart
         />
         <YAxis tick={{ fill: "#71717a", fontSize: 11 }} width={45} />
         <Tooltip
+          wrapperStyle={{ zIndex: 50 }}
           contentStyle={{
             backgroundColor: "#18181b",
             border: "1px solid #27272a",

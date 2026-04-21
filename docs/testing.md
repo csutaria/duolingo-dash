@@ -61,13 +61,40 @@ Planned tests, grouped by surface. Roughly priority-ordered within each group. I
 - [x] `polling.ts` kickoff guard — regression for commit `84935f3`: `shouldKickoffPoll({isRunning, currentSync})` returns false when either guard is set. Predicate extracted from the inline condition in `startPolling`; behavior unchanged. (`polling.test.ts`)
 - [x] `fullSync` clears `currentSync` in a `finally` even when the call throws. Error path only (see `fullsync-instrumentation.test.ts` header for scope rationale): asserts `currentSync.type` during the in-flight call is `single`/`cycle` as expected, is `null` after the call returns, and that `logSync` receives the right error metadata. Success path is structurally protected by the same finally and is planned alongside path-based skill progress fixtures. (`fullsync-instrumentation.test.ts`)
 
-### Stacked XP chart — data logic (`course-xp-history`)
+### Streak epoch tracking (`updateStreakEpochs`, `backfillImpliedFreeze`, `migrateStreakTracking`)
 
-Core of the feature is non-trivial JS computation in `getCourseXpHistory` (in `queries.ts`). UI is intentionally untested; the data layer is not.
+Logic is non-trivial and directly drives chart coloring correctness. All three functions are in `src/lib/db.ts`.
 
-- `getCourseXpHistory` forward-fill — given sparse snapshots per course, each date in the range should carry the most recent prior `total_xp` for that course, not zero.
-- `_total` per date — sum of all forward-filled course values at that date; verify it equals the stack top and does not mix in `profile.total_xp` or `xp_daily` cumulative sums.
-- Edge cases: no snapshots for a course in the window (course shouldn't appear); single snapshot (forward-fill to end of range); xp_daily gap for a date (treat as 0 gained).
+**`migrateStreakTracking`:**
+- Idempotency — run twice on the same DB, `implied_freeze` column appears exactly once, existing rows unchanged.
+
+**`updateStreakEpochs`:**
+- Intra-day guard — `currentStreakStart >= today` → function returns early, no row written.
+- First-sync case — no open epoch exists → inserts initial epoch with `streak_end_date = NULL`.
+- Same-start no-op — open epoch already has `streak_start_date = currentStreakStart` → no changes.
+- Epoch transition — different `currentStreakStart`: closes old epoch (`streak_end_date = newStart - 1 day`, `streak_length = previousStreakLength`), opens new epoch.
+- Idempotency across transitions — calling twice with the same new start doesn't duplicate rows (`INSERT OR IGNORE`).
+
+**`backfillImpliedFreeze`:**
+- WHERE clause correctness — sets `implied_freeze = 1` only for rows where `date >= currentStreakStart AND date < DATE('now') AND gained_xp = 0 AND streak_extended = 0 AND frozen = 0`.
+- `date < DATE('now')` boundary — today's row is never touched (handles intra-day sync before practice).
+- Already-set rows — `implied_freeze = 0` filter means already-set rows are not redundantly updated (idempotent).
+- Rows outside the streak window — zero-XP rows before `currentStreakStart` must remain `implied_freeze = 0`.
+
+### Stacked XP chart — data logic (`course-xp-history` and `course-xp-daily-history`)
+
+Core of both features is non-trivial JS computation in `queries.ts`. UI is intentionally untested; the data layer is not.
+
+**`getCourseXpHistory` (cumulative, History page):**
+- Forward-fill — sparse snapshots per course: each date carries the most recent prior `xp`, not zero.
+- `_total` per date — sum of forward-filled course values; must not mix in `profile.total_xp` or `xp_daily` cumulative sums.
+- Edge cases: no snapshots in window; single snapshot (forward-fill to end of range).
+
+**`getCourseXpDailyHistory` (incremental, Overview page):**
+- Delta computation — day-over-day diff from `course_snapshots.xp`; a day with no snapshot for a course must produce delta 0, not carry forward.
+- Baseline seeding — the last snapshot strictly before `startStr` seeds `lastKnown`; first-ever snapshot for a course yields delta 0 (no prior reference).
+- Untracked gap — `_untracked = max(0, xp_daily.gained_xp - sum_of_course_deltas)` per day; verify it is 0 when deltas match or exceed the daily total, and positive when snapshot coverage is incomplete.
+- All-zero day — a day with no snapshots for any course and a non-zero `xp_daily` entry should produce all-zero language deltas and a non-zero `_untracked`.
 
 ### Path-based skill progress (`94e3fab`)
 

@@ -94,6 +94,7 @@ export function StackedXpChart({
             tickFormatter={formatXp}
           />
           <Tooltip
+            wrapperStyle={{ zIndex: 50 }}
             contentStyle={{
               backgroundColor: "#18181b",
               border: "1px solid #27272a",

@@ -130,7 +130,26 @@ function initSchema(db: Database.Database): void {
     );
   `);
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS streak_epochs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      streak_start_date TEXT NOT NULL UNIQUE,
+      streak_end_date TEXT,
+      streak_length INTEGER,
+      detected_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
   migrateSyncLog(db);
+  migrateStreakTracking(db);
+}
+
+/** @internal exported for tests */
+export function migrateStreakTracking(db: Database.Database): void {
+  const cols = db.prepare("PRAGMA table_info(xp_daily)").all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === "implied_freeze")) {
+    db.exec("ALTER TABLE xp_daily ADD COLUMN implied_freeze INTEGER NOT NULL DEFAULT 0");
+  }
 }
 
 /** @internal exported for tests */
@@ -143,6 +162,59 @@ export function migrateSyncLog(db: Database.Database): void {
   if (!has("cycle_all")) {
     db.exec("ALTER TABLE sync_log ADD COLUMN cycle_all INTEGER NOT NULL DEFAULT 0");
   }
+}
+
+export function updateStreakEpochs(
+  currentStreakStart: string,
+  previousStreakLength: number | null,
+): void {
+  const db = getDb();
+  const today = new Date().toISOString().split("T")[0];
+
+  // Never act on a streak_start that is today — intra-day sync before practice
+  if (currentStreakStart >= today) return;
+
+  const open = db
+    .prepare(
+      "SELECT id, streak_start_date FROM streak_epochs WHERE streak_end_date IS NULL ORDER BY id DESC LIMIT 1",
+    )
+    .get() as { id: number; streak_start_date: string } | undefined;
+
+  if (!open) {
+    // First sync ever — record the initial epoch
+    db.prepare("INSERT OR IGNORE INTO streak_epochs (streak_start_date) VALUES (?)").run(
+      currentStreakStart,
+    );
+    return;
+  }
+
+  if (open.streak_start_date === currentStreakStart) return; // Same streak, nothing to do
+
+  // Streak changed: close old epoch, open new one
+  const endD = new Date(`${currentStreakStart}T12:00:00`);
+  endD.setDate(endD.getDate() - 1);
+  const endDate = endD.toISOString().split("T")[0];
+
+  db.prepare(
+    "UPDATE streak_epochs SET streak_end_date = ?, streak_length = ? WHERE id = ?",
+  ).run(endDate, previousStreakLength ?? null, open.id);
+
+  db.prepare("INSERT OR IGNORE INTO streak_epochs (streak_start_date) VALUES (?)").run(
+    currentStreakStart,
+  );
+}
+
+export function backfillImpliedFreeze(currentStreakStart: string): void {
+  const db = getDb();
+  db.prepare(`
+    UPDATE xp_daily SET implied_freeze = 1
+    WHERE date >= ?
+      AND date < DATE('now')
+      AND gained_xp = 0
+      AND streak_extended = 0
+      AND frozen = 0
+      AND implied_freeze = 0
+  `).run(currentStreakStart);
 }
 
 export function getLastSyncXp(): number | null {

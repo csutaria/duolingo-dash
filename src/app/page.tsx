@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useData } from "@/lib/hooks";
 import { StatCard } from "@/components/StatCard";
 import { CourseCard } from "@/components/CourseCard";
-import { StackedXpChart } from "@/components/StackedXpChart";
+import { DailyXpBarChart } from "@/components/DailyXpBarChart";
 import { assignCourseColors } from "@/lib/colors";
 
 const XP_RANGES = [
@@ -20,32 +20,32 @@ export default function Overview() {
   const { data: courses } = useData<Array<Record<string, unknown>>>("course-comparison");
   const { data: xpStats } = useData<Record<string, unknown>>("xp-stats");
   const [xpRange, setXpRange] = useState("30");
-  const { data: stackData } = useData<Array<Record<string, unknown>>>(
-    "course-xp-history",
+  const { data: dailyData } = useData<Array<Record<string, unknown>>>(
+    "course-xp-daily-history",
     xpRange ? { days: xpRange } : undefined
   );
 
-  const profileTotalXp = profile ? Number(profile.total_xp) : 0;
+  // Stable color assignment from full course list — shared with XP history page
+  const allCourseIds = useMemo(() => {
+    if (!courses) return [];
+    return courses.map((c) => String(c.course_id)).sort();
+  }, [courses]);
 
+  const colorMap = useMemo(() => assignCourseColors(allCourseIds), [allCourseIds.join(",")]);
+
+  // Course IDs present in the daily data (keys other than date/meta)
   const courseIds = useMemo(() => {
-    if (!stackData?.length) return [];
-    return Object.keys(stackData[0]).filter((k) => k !== "date" && k !== "_total");
-  }, [stackData]);
+    if (!dailyData?.length) return [];
+    return Object.keys(dailyData[0]).filter(
+      (k) => k !== "date" && k !== "_untracked" && k !== "_total"
+    );
+  }, [dailyData]);
 
-  const colorMap = useMemo(() => assignCourseColors(courseIds), [courseIds.join(",")]);
-
+  // Courses with any non-zero delta in the selected window
   const activeInWindow = useMemo(() => {
-    if (!stackData || stackData.length < 2) return new Set<string>();
-    const first = stackData[0];
-    const last = stackData[stackData.length - 1];
-    return new Set(courseIds.filter((id) => Number(last[id] ?? 0) > Number(first[id] ?? 0)));
-  }, [stackData, courseIds]);
-
-  const xpDomainStart = xpRange ? (() => {
-    const d = new Date();
-    d.setDate(d.getDate() - Number(xpRange));
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12).getTime();
-  })() : undefined;
+    if (!dailyData) return new Set<string>();
+    return new Set(courseIds.filter((id) => dailyData.some((d) => Number(d[id] ?? 0) > 0)));
+  }, [dailyData, courseIds]);
 
   const courseNames = useMemo(() => {
     const map: Record<string, string> = {};
@@ -54,6 +54,31 @@ export default function Overview() {
     }
     return map;
   }, [courses]);
+
+  // XP gained per course in the selected window (sum of daily deltas)
+  const windowXp = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const d of dailyData ?? []) {
+      for (const id of courseIds) {
+        map[id] = (map[id] ?? 0) + Number(d[id] ?? 0);
+      }
+    }
+    return map;
+  }, [dailyData, courseIds]);
+
+  // Active-in-window first sorted by window XP desc, then inactive by total XP desc
+  const sortedCourses = useMemo(() => {
+    if (!courses) return [];
+    return [...courses].sort((a, b) => {
+      const aId = String(a.course_id);
+      const bId = String(b.course_id);
+      const aActive = activeInWindow.has(aId) ? 0 : 1;
+      const bActive = activeInWindow.has(bId) ? 0 : 1;
+      if (aActive !== bActive) return aActive - bActive;
+      if (aActive === 0) return (windowXp[bId] ?? 0) - (windowXp[aId] ?? 0);
+      return Number(b.xp) - Number(a.xp);
+    });
+  }, [courses, activeInWindow, windowXp]);
 
   if (pLoading && !profile) {
     return <div className="text-zinc-500">Loading...</div>;
@@ -158,10 +183,10 @@ export default function Overview() {
         </div>
       </section>
 
-      {stackData && stackData.length > 0 && (
+      {dailyData && (
         <section>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-lg font-semibold">XP History</h3>
+            <h3 className="text-lg font-semibold">Daily XP</h3>
             <div className="flex gap-1">
               {XP_RANGES.map((r) => (
                 <button
@@ -179,14 +204,13 @@ export default function Overview() {
             </div>
           </div>
           <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-            <StackedXpChart
-              data={stackData}
+            <DailyXpBarChart
+              data={dailyData}
               courseIds={courseIds}
               colors={colorMap}
               courseNames={courseNames}
-              profileTotalXp={profileTotalXp}
-              domainStart={xpDomainStart}
             />
+            <p className="text-xs text-zinc-600 mt-1">Daily XP gained per language</p>
           </div>
         </section>
       )}
@@ -194,7 +218,7 @@ export default function Overview() {
       <section>
         <h3 className="text-lg font-semibold mb-3">Languages</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {courses?.map((c) => {
+          {sortedCourses.map((c) => {
             const cId = String(c.course_id);
             return (
               <CourseCard

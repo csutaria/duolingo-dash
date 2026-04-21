@@ -6,6 +6,7 @@ import {
   getCourseHistory,
   getCourseComparison,
   getCourseXpHistory,
+  getCourseXpDailyHistory,
   getXpDaily,
   getXpStats,
   getVocabLatest,
@@ -15,6 +16,7 @@ import {
   getSkillDecay,
   getSkillHistory,
   getAchievements,
+  getStreakEpochs,
 } from "@/lib/queries";
 
 const DEMO_MODE = process.env.DEMO_MODE === "true";
@@ -53,6 +55,11 @@ export async function GET(request: NextRequest) {
       case "course-xp-history": {
         const days = searchParams.get("days");
         return NextResponse.json(getCourseXpHistory(days ? parseInt(days) : undefined));
+      }
+
+      case "course-xp-daily-history": {
+        const days = searchParams.get("days");
+        return NextResponse.json(getCourseXpDailyHistory(days ? parseInt(days) : undefined));
       }
 
       case "xp-daily": {
@@ -103,6 +110,9 @@ export async function GET(request: NextRequest) {
 
       case "achievements":
         return NextResponse.json(getAchievements());
+
+      case "streak-epochs":
+        return NextResponse.json(getStreakEpochs());
 
       default:
         return NextResponse.json({ error: `Unknown query: ${query}` }, { status: 400 });

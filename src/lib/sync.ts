@@ -10,6 +10,8 @@ import {
   snapshotVocab,
   snapshotSkills,
   upsertAchievements,
+  updateStreakEpochs,
+  backfillImpliedFreeze,
 } from "./db";
 import { resolveLegacyLanguageData } from "./legacy-language-data";
 import { clearCurrentSync, setCurrentSync } from "./sync-state";
@@ -46,6 +48,12 @@ export async function fullSync(client: DuolingoClient, cycleAllCourses = false):
     saveProfile(user);
     saveCourseSnapshots(user);
     await saveXpHistory(client);
+
+    const streakStart = user.streakData?.currentStreak?.startDate ?? null;
+    if (streakStart) {
+      updateStreakEpochs(streakStart, user.streakData?.previousStreak?.length ?? null);
+      backfillImpliedFreeze(streakStart);
+    }
 
     const achievements = user._achievements
       ?? (user as unknown as Record<string, unknown>).achievements as typeof user._achievements

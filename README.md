@@ -6,7 +6,7 @@ Overview
 
 More screenshots
 
-XP HistoryCourse DetailVocabulary
+HistoryCourse DetailVocabulary
 
 
 
