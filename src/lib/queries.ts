@@ -287,11 +287,17 @@ export function getCourseXpDailyHistory(days?: number): Array<Record<string, unk
     s.setDate(s.getDate() - days);
     startStr = toDateStr(s);
   } else {
-    const row = db.prepare(
+    const snapRow = db.prepare(
       "SELECT MIN(DATE(snapshot_time)) as d FROM course_snapshots"
     ).get() as { d: string | null };
-    if (!row?.d) return [];
-    startStr = row.d;
+    if (!snapRow?.d) return []; // No snapshot structure → no course IDs to iterate
+
+    const xpRow = db.prepare(
+      "SELECT MIN(date) as d FROM xp_daily"
+    ).get() as { d: string | null };
+
+    // Extend back to xp_daily history if it predates the first snapshot
+    startStr = xpRow?.d && xpRow.d < snapRow.d ? xpRow.d : snapRow.d;
   }
 
   const courseIds = (
