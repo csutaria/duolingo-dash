@@ -55,6 +55,8 @@ const panelBase =
 const panelShown = "pointer-events-auto visible opacity-100";
 const panelHidden = "pointer-events-none invisible opacity-0";
 
+type SyncMode = "baseline" | "fast";
+
 function SyncStatusPanel({
   lastSync,
   syncError,
@@ -62,8 +64,11 @@ function SyncStatusPanel({
   paused,
   currentlyRunning,
   authenticated,
-  msUntilNextPoll,
-  msUntilNextAllCourseSync,
+  msUntilNextXpCheck,
+  msUntilNextNightlySync,
+  syncMode,
+  fastIdleTicks,
+  fastIdleTicksRequired,
   pinned,
   visible,
   onTogglePaused,
@@ -77,8 +82,11 @@ function SyncStatusPanel({
   paused: boolean;
   currentlyRunning: boolean;
   authenticated: boolean;
-  msUntilNextPoll: number | null;
-  msUntilNextAllCourseSync: number | null;
+  msUntilNextXpCheck: number | null;
+  msUntilNextNightlySync: number | null;
+  syncMode: SyncMode;
+  fastIdleTicks: number;
+  fastIdleTicksRequired: number;
   pinned: boolean;
   visible: boolean;
   onTogglePaused: () => void;
@@ -86,6 +94,11 @@ function SyncStatusPanel({
   currentSync: CurrentSync | null;
   expectedMsForCurrent: number | null;
 }) {
+  const idleText =
+    syncMode === "fast"
+      ? "Watching — checking every 2m"
+      : "Idle — XP check every 30m";
+
   const stateLabel = !authenticated
     ? { text: "Not connected", color: "text-red-400" }
     : paused && currentlyRunning
@@ -96,10 +109,14 @@ function SyncStatusPanel({
           ? { text: "Polling off", color: "text-red-400" }
           : currentlyRunning
             ? { text: "Syncing now…", color: "text-yellow-400" }
-            : { text: "Idle — polls every 15m", color: "text-green-400" };
+            : { text: idleText, color: "text-green-400" };
 
-  const pollMin = msUntilNextPoll != null ? ceilMin(msUntilNextPoll) : null;
-  const allCourseMin = msUntilNextAllCourseSync != null ? ceilMin(msUntilNextAllCourseSync) : null;
+  const xpCheckMin = msUntilNextXpCheck != null ? ceilMin(msUntilNextXpCheck) : null;
+  const nightlyMin = msUntilNextNightlySync != null ? ceilMin(msUntilNextNightlySync) : null;
+  const quietRemainingMin =
+    syncMode === "fast"
+      ? Math.max(0, fastIdleTicksRequired - fastIdleTicks) * 2
+      : null;
 
   return (
     <div
@@ -139,27 +156,35 @@ function SyncStatusPanel({
 
       <dl className="mt-2 space-y-1.5 text-[11px] leading-snug">
         <div className="flex gap-2">
-          <dt className="shrink-0 text-zinc-500">Next XP poll</dt>
+          <dt className="shrink-0 text-zinc-500">Next XP check</dt>
           <dd className="tabular-nums text-zinc-300">
             {paused
               ? "— (paused)"
-              : pollMin != null && pollMin > 0
-                ? `~${pollMin}m`
-                : pollMin === 0
+              : xpCheckMin != null && xpCheckMin > 0
+                ? `~${xpCheckMin}m`
+                : xpCheckMin === 0
                   ? "imminent"
-                  : "— (pending first poll)"}
+                  : "— (pending first check)"}
           </dd>
         </div>
+        {syncMode === "fast" && quietRemainingMin != null && (
+          <div className="flex gap-2">
+            <dt className="shrink-0 text-zinc-500">Full sync if quiet</dt>
+            <dd className="tabular-nums text-zinc-300">
+              {quietRemainingMin > 0 ? `in ~${quietRemainingMin}m` : "imminent"}
+            </dd>
+          </div>
+        )}
         <div className="flex gap-2">
-          <dt className="shrink-0 text-zinc-500">Next all-course sync</dt>
+          <dt className="shrink-0 text-zinc-500">Next nightly sync</dt>
           <dd className="tabular-nums text-zinc-300">
             {paused
               ? "— (paused)"
-              : allCourseMin != null && allCourseMin > 0
-                ? `~${allCourseMin}m`
-                : allCourseMin === 0
+              : nightlyMin != null && nightlyMin > 0
+                ? `~${nightlyMin}m`
+                : nightlyMin === 0
                   ? "imminent"
-                  : "— (pending first sync)"}
+                  : "— (scheduling)"}
           </dd>
         </div>
       </dl>
@@ -185,7 +210,7 @@ function SyncStatusPanel({
                 : "Pause polling"}
           </button>
           <p className="mt-1.5 text-[10px] leading-snug text-zinc-500">
-            Pausing stops background polling and all-course cycling. Manual Refresh and Sync All still work.
+            Pausing stops baseline XP checks, quiet-detector fast polls, and the nightly sync. Manual Refresh and Sync All still work. Resets on server restart.
           </p>
         </div>
       )}
@@ -259,9 +284,12 @@ export function SyncBar() {
   const authenticated = status?.authenticated === true;
   const pollingOn = status?.polling === true;
   const currentlyRunning = status?.currentlyRunning === true || syncing;
-  const msUntilNextPoll = (status?.msUntilNextPoll as number | null) ?? null;
-  const msUntilNextAllCourseSync =
-    (status?.msUntilNextAllCourseSync as number | null) ?? null;
+  const msUntilNextXpCheck = (status?.msUntilNextXpCheck as number | null) ?? null;
+  const msUntilNextNightlySync =
+    (status?.msUntilNextNightlySync as number | null) ?? null;
+  const syncMode = ((status?.syncMode as SyncMode | undefined) ?? "baseline") as SyncMode;
+  const fastIdleTicks = (status?.fastIdleTicks as number | undefined) ?? 0;
+  const fastIdleTicksRequired = (status?.fastIdleTicksRequired as number | undefined) ?? 5;
 
   const currentSync = (status?.currentSync as CurrentSync | null) ?? null;
   const expectedDurationMs = status?.expectedDurationMs as
@@ -280,10 +308,12 @@ export function SyncBar() {
         ? "text-yellow-400"
         : paused || !pollingOn
           ? "text-red-500"
-          : "text-green-500";
+          : syncMode === "fast"
+            ? "text-yellow-400"
+            : "text-green-500";
 
-  const nextPollMin =
-    msUntilNextPoll != null ? Math.max(0, Math.ceil(msUntilNextPoll / 60_000)) : null;
+  const nextCheckMin =
+    msUntilNextXpCheck != null ? Math.max(0, Math.ceil(msUntilNextXpCheck / 60_000)) : null;
 
   const indicatorLabel = !status
     ? "Initializing…"
@@ -297,9 +327,11 @@ export function SyncBar() {
             ? "Polling off"
             : currentlyRunning
               ? "Syncing…"
-              : nextPollMin != null && nextPollMin > 0
-                ? `Poll in ~${nextPollMin}m`
-                : "Polling";
+              : syncMode === "fast"
+                ? "Watching XP"
+                : nextCheckMin != null && nextCheckMin > 0
+                  ? `Check in ~${nextCheckMin}m`
+                  : "Polling";
 
   if (demoMode) {
     return (
@@ -351,8 +383,11 @@ export function SyncBar() {
           paused={paused}
           currentlyRunning={currentlyRunning}
           authenticated={authenticated}
-          msUntilNextPoll={msUntilNextPoll}
-          msUntilNextAllCourseSync={msUntilNextAllCourseSync}
+          msUntilNextXpCheck={msUntilNextXpCheck}
+          msUntilNextNightlySync={msUntilNextNightlySync}
+          syncMode={syncMode}
+          fastIdleTicks={fastIdleTicks}
+          fastIdleTicksRequired={fastIdleTicksRequired}
           pinned={pinned}
           visible={panelVisible}
           onTogglePaused={handleTogglePaused}

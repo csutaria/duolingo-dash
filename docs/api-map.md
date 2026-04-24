@@ -15,7 +15,7 @@ JWT (env var)
 
 - **Unofficial API.** No public docs, no stability guarantees. Everything here was reverse-engineered from web traffic. Individual endpoints can disappear without notice.
 - `**2017-06-30`** URL prefix has been stable for years, but that stability is observational — don't treat it as contractual.
-- **Rate limiting is CAPTCHA-style** (HTTP **403** with a `blockScript` payload), not classic **429**. The ~15-minute poll interval is chosen to match common community practice and stay well below trigger thresholds.
+- **Rate limiting is CAPTCHA-style** (HTTP **403** with a `blockScript` payload), not classic **429**. The 30-minute baseline XP poll — and the 2-minute fast-mode polls, which only run briefly while the user is active — are chosen to match common community practice and stay well below trigger thresholds.
 - **Avatar URLs from endpoint ①** are often protocol-relative (`//…`) and usually need a size suffix (`/xlarge`) to load publicly. Bare avatar URLs frequently **403**.
 - **Detailed skill/vocab data follows the active course.** Endpoints ④ and ⑤ implicitly read whichever course is currently active on the account — the only way to read data for a non-active course is to PATCH (⑥) to it first, read, and switch back. This is why `syncAllCourseDetails` exists (see "What requires course switching" below).
 

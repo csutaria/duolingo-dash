@@ -1,29 +1,32 @@
 import { DuolingoClient, initClient } from "./duolingo";
 import { startPolling, stopPolling, isPolling } from "./polling";
+import { getPollingState } from "./polling-state";
 
-let client: DuolingoClient | null = null;
-// In-memory only by design: resets on server restart so nightly polls resume.
-let userPaused = false;
+// `client` and `userPaused` live on the shared globalThis bucket in
+// polling-state.ts so Next.js HMR can't orphan timers or spawn a second
+// singleton. See the comment in polling-state.ts.
 
 export function ensureClient(): DuolingoClient {
-  if (client) return client;
+  const state = getPollingState();
+  if (state.client) return state.client;
 
   const jwt = process.env.DUOLINGO_JWT;
   if (!jwt) {
     throw new Error("DUOLINGO_JWT environment variable is not set");
   }
 
-  client = initClient(jwt);
+  state.client = initClient(jwt);
 
-  if (!isPolling() && !userPaused) {
-    startPolling(client);
+  if (!isPolling() && !state.userPaused) {
+    startPolling(state.client);
   }
 
-  return client;
+  return state.client;
 }
 
 export function getClientOrNull(): DuolingoClient | null {
-  if (client) return client;
+  const state = getPollingState();
+  if (state.client) return state.client;
   try {
     return ensureClient();
   } catch {
@@ -33,21 +36,22 @@ export function getClientOrNull(): DuolingoClient | null {
 
 export function resetClient(): void {
   stopPolling();
-  client = null;
+  getPollingState().client = null;
 }
 
 export function isUserPaused(): boolean {
-  return userPaused;
+  return getPollingState().userPaused;
 }
 
 export function pauseUserPolling(): void {
-  userPaused = true;
+  getPollingState().userPaused = true;
   stopPolling();
 }
 
 export function resumeUserPolling(): void {
-  userPaused = false;
-  if (client && !isPolling()) {
-    startPolling(client);
+  const state = getPollingState();
+  state.userPaused = false;
+  if (state.client && !isPolling()) {
+    startPolling(state.client);
   }
 }

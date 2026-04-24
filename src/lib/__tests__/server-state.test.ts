@@ -1,12 +1,14 @@
 import type { DuolingoClient } from "../duolingo";
+import { __resetPollingStateForTests } from "../polling-state";
 
 type ServerStateModule = typeof import("../server-state");
 
 /**
- * server-state.ts holds singletons at module scope (`client`, `userPaused`),
- * delegates timer lifecycle to ./polling, and client construction to ./duolingo.
- * Each test loads the module fresh via `jest.isolateModules` with both
- * collaborators mocked so no real timers start and no JWT is needed.
+ * server-state.ts holds singletons on a shared `globalThis` bucket (see
+ * polling-state.ts), delegates timer lifecycle to ./polling, and client
+ * construction to ./duolingo. Each test loads the module fresh via
+ * `jest.resetModules()` AND resets the bucket explicitly so the singletons
+ * start cold.
  */
 
 type PollingMockState = {
@@ -65,6 +67,7 @@ beforeEach(() => {
   jest.resetModules();
   jest.dontMock("../polling");
   jest.dontMock("../duolingo");
+  __resetPollingStateForTests();
 });
 
 afterEach(() => {
@@ -76,6 +79,7 @@ afterEach(() => {
   jest.resetModules();
   jest.dontMock("../polling");
   jest.dontMock("../duolingo");
+  __resetPollingStateForTests();
 });
 
 describe("isUserPaused", () => {

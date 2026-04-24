@@ -13,9 +13,10 @@ export async function POST(request: Request) {
     let result;
     if (force) {
       result = await fullSync(client, cycleAll);
-      if (cycleAll) notifyAllCourseSyncComplete();
+      notifyAllCourseSyncComplete();
     } else {
       result = await manualRefresh(client);
+      notifyAllCourseSyncComplete();
     }
 
     return NextResponse.json(result);

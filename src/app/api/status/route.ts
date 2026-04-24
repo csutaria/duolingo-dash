@@ -38,7 +38,10 @@ export async function GET() {
     expectedDurationMs,
     lastSyncResult: syncResult,
     dbStatus,
-    msUntilNextPoll: timing.msUntilNextPoll,
-    msUntilNextAllCourseSync: timing.msUntilNextAllCourseSync,
+    msUntilNextXpCheck: timing.msUntilNextXpCheck,
+    msUntilNextNightlySync: timing.msUntilNextNightlySync,
+    syncMode: timing.syncMode,
+    fastIdleTicks: timing.fastIdleTicks,
+    fastIdleTicksRequired: timing.fastIdleTicksRequired,
   });
 }
