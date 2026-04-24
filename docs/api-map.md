@@ -56,7 +56,8 @@ JWT (env var)
 **⑥ `PATCH /2017-06-30/users/{userId}*`* — switch active course  
 *Input:* `userId`, `courseId`, `learningLanguage`, `fromLanguage` — all sourced from endpoint ①  
 *Scope:* **account-wide side effect** — changes active course for the real Duolingo account  
-*Required because:* endpoints ④ and ⑤ are implicitly scoped to the active course — the only way to read another language's vocab/skills is to switch first
+*Required because:* endpoints ④ and ⑤ are implicitly scoped to the active course — the only way to read another language's vocab/skills is to switch first  
+*Side effect on course ordering:* the switched-to course moves to the top of the user's course-selector (a recency stack). The API-returned `user.courses` array mirrors that selector order. To avoid perturbing it, `syncAllCourseDetails` visits non-active courses in **reverse of `user.courses`** and restores the original active course last — the identity permutation on the stack, so the selector ends the cycle in the same order the user started with
 
 **⑦ `GET /v2/mistakes/users/{userId}/courses/{courseId}/count*`* — mistakes  
 *Input:* `userId`, `courseId` (from endpoint ①)  

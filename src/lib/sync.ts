@@ -195,8 +195,15 @@ async function syncAllCourseDetails(client: DuolingoClient, user: DuolingoUser):
   // Sync the currently active course first (no switch needed)
   await saveLanguageDetails(client, user.currentCourseId, user.learningLanguage);
 
-  // Cycle through remaining courses
-  for (const course of user.courses) {
+  // Cycle through remaining courses in REVERSE of `user.courses` order.
+  // The API-returned `user.courses` mirrors the Duolingo app's own
+  // course-selector order, and each `switchCourse` moves its target to
+  // the top of that selector (a recency stack). Visiting non-active
+  // courses in reverse and then restoring the active one last produces
+  // the identity permutation on the selector — the user's existing
+  // course order is preserved post-sync.
+  for (let i = user.courses.length - 1; i >= 0; i--) {
+    const course = user.courses[i];
     if (course.id === originalCourseId) continue;
     try {
       await client.switchCourse(course.id, course.learningLanguage, course.fromLanguage);
