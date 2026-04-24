@@ -21,7 +21,7 @@ const METRICS = [
   { label: "Sessions", value: "sessions" as const },
 ];
 
-export default function XpHistory() {
+export default function HistoryPage() {
   const [range, setRange] = useState("30");
   const [metric, setMetric] = useState<"time" | "sessions">("time");
   const params = range ? { days: range } : undefined;

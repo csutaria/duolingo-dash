@@ -6,7 +6,7 @@ import { SyncBar } from "./SyncBar";
 
 const links = [
   { href: "/", label: "Overview" },
-  { href: "/xp", label: "History" },
+  { href: "/history", label: "History" },
   { href: "/vocab", label: "Vocabulary" },
 ];
 

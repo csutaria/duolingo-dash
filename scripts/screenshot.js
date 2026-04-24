@@ -13,7 +13,7 @@ const OUT = path.join(__dirname, "../docs/screenshots");
 
 const pages = [
   { name: "overview",      url: "/",                            waitFor: "text=Total XP" },
-  { name: "xp-history",   url: "/xp",                          waitFor: "text=XP History" },
+  { name: "history",       url: "/history",                     waitFor: "text=History" },
   { name: "course-detail", url: "/course/DUOLINGO_ES_EN",      waitFor: "text=Completed" },
   { name: "vocabulary",    url: "/vocab",                       waitFor: "text=Total Words" },
 ];
