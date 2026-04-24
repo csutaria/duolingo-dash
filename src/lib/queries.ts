@@ -191,11 +191,12 @@ export function getCourseXpHistory(days?: number): Array<Record<string, unknown>
   const today = new Date();
   const todayStr = toDateStr(today);
 
-  // Determine window start date
+  // Determine window start date. `days = N` means "last N calendar days
+  // including today", so walking startStr..todayStr inclusive yields N rows.
   let startStr: string;
   if (days) {
     const s = new Date(today);
-    s.setDate(s.getDate() - days);
+    s.setDate(s.getDate() - (days - 1));
     startStr = toDateStr(s);
   } else {
     const row = db.prepare(
@@ -281,10 +282,11 @@ export function getCourseXpDailyHistory(days?: number): Array<Record<string, unk
   const today = new Date();
   const todayStr = toDateStr(today);
 
+  // `days = N` means "last N calendar days including today".
   let startStr: string;
   if (days) {
     const s = new Date(today);
-    s.setDate(s.getDate() - days);
+    s.setDate(s.getDate() - (days - 1));
     startStr = toDateStr(s);
   } else {
     const snapRow = db.prepare(

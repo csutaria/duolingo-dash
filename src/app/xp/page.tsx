@@ -37,7 +37,7 @@ export default function XpHistory() {
 
   const xpDomainStart = range ? (() => {
     const d = new Date();
-    d.setDate(d.getDate() - Number(range));
+    d.setDate(d.getDate() - (Number(range) - 1));
     return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12).getTime();
   })() : undefined;
 
