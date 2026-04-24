@@ -220,6 +220,7 @@ export default function Overview() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {sortedCourses.map((c) => {
             const cId = String(c.course_id);
+            const isActive = activeInWindow.has(cId);
             return (
               <CourseCard
                 key={cId}
@@ -233,7 +234,9 @@ export default function Overview() {
                 totalSkills={c.total_skills != null ? Number(c.total_skills) : undefined}
                 completedSkills={c.completed_skills != null ? Number(c.completed_skills) : undefined}
                 inProgressSkills={c.in_progress_skills != null ? Number(c.in_progress_skills) : undefined}
-                indicatorColor={activeInWindow.has(cId) ? colorMap[cId] : undefined}
+                indicatorColor={isActive ? colorMap[cId] : undefined}
+                windowXp={windowXp[cId] ?? 0}
+                dimmed={!isActive}
               />
             );
           })}
