@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -32,26 +33,52 @@ export function StackedXpChart({
   domainStart,
   height = 350,
 }: StackedXpChartProps) {
-  if (!data.length || !courseIds.length) {
+  // All derived state is memoized so switching to all-time (which pushes
+  // ~365 rows through the chart) doesn't re-walk `data` for every slice
+  // on every render.
+  const withTime = useMemo(
+    () =>
+      data.map((d) => {
+        const [y, m, day] = String(d.date).split("-").map(Number);
+        return { ...d, _t: new Date(y, m - 1, day, 12).getTime() };
+      }),
+    [data],
+  );
+
+  const { sortedIds, hasPretrack, hasPrior, priorValue, yMin } = useMemo(() => {
+    if (!data.length) {
+      return { sortedIds: [] as string[], hasPretrack: false, hasPrior: false, priorValue: 0, yMin: 0 };
+    }
+    const last = data[data.length - 1];
+    const activeSet: string[] = [];
+    const nonZero: Record<string, boolean> = {};
+    let pretrack = false;
+    let minTotal = Infinity;
+    for (const row of data) {
+      const t = Number(row._total ?? 0);
+      if (t > 0 && t < minTotal) minTotal = t;
+      if (!pretrack && Number(row._pretrack ?? 0) > 0) pretrack = true;
+      for (const id of courseIds) {
+        if (!nonZero[id] && Number(row[id] ?? 0) > 0) nonZero[id] = true;
+      }
+    }
+    for (const id of courseIds) if (nonZero[id]) activeSet.push(id);
+    activeSet.sort(
+      (a, b) => Number(last[a] ?? 0) - Number(last[b] ?? 0),
+    );
+    const prior = Number(data[0]?._prior ?? 0);
+    return {
+      sortedIds: activeSet,
+      hasPretrack: pretrack,
+      hasPrior: prior > 0,
+      priorValue: prior,
+      yMin: isFinite(minTotal) ? minTotal : 0,
+    };
+  }, [data, courseIds]);
+
+  if (!data.length) {
     return <div className="text-zinc-500 text-sm">No XP history yet</div>;
   }
-
-  const withTime = data.map((d) => {
-    const [y, m, day] = String(d.date).split("-").map(Number);
-    return { ...d, _t: new Date(y, m - 1, day, 12).getTime() };
-  });
-
-  // Only render areas for courses with at least one non-zero value
-  const activeCourseIds = courseIds.filter((id) =>
-    data.some((d) => Number(d[id] ?? 0) > 0)
-  );
-
-  // Stack largest at bottom
-  const sortedIds = [...activeCourseIds].sort(
-    (a, b) =>
-      Number(data[data.length - 1][b] ?? 0) -
-      Number(data[data.length - 1][a] ?? 0)
-  );
 
   const formatTs = (ts: number) => {
     const d = new Date(ts);
@@ -65,6 +92,17 @@ export function StackedXpChart({
     domainStart ?? "dataMin",
     "dataMax",
   ];
+
+  // Y-axis: anchor just below _prior whenever it exists so the constant
+  // baseline slab sits at the floor and the window's deltas (plus any
+  // _pretrack) fill the visible range. Falls back to a tight zoom on
+  // _total when _prior is absent (e.g. no profile data).
+  const yDomain: [number | string, number | string] = hasPrior
+    ? [Math.floor(priorValue * 0.99), "dataMax"]
+    : domainStart != null
+      ? [Math.floor(yMin * 0.98), "dataMax"]
+      : [0, "dataMax"];
+  const yFloorValue = typeof yDomain[0] === "number" ? yDomain[0] : null;
 
   return (
     <div>
@@ -89,9 +127,31 @@ export function StackedXpChart({
             minTickGap={40}
           />
           <YAxis
-            tick={{ fill: "#71717a", fontSize: 11 }}
+            tick={(props) => {
+              const { x, y, payload } = props as {
+                x: number;
+                y: number;
+                payload: { value: number };
+              };
+              const isFloor = yFloorValue != null && Number(payload.value) === yFloorValue;
+              return (
+                <text
+                  x={x}
+                  y={y}
+                  dx={-4}
+                  textAnchor="end"
+                  fill={isFloor ? "#d4d4d8" : "#71717a"}
+                  fontSize={11}
+                  fontWeight={isFloor ? 600 : 400}
+                >
+                  {formatXp(Number(payload.value))}
+                </text>
+              );
+            }}
             width={45}
             tickFormatter={formatXp}
+            domain={yDomain}
+            allowDataOverflow
           />
           <Tooltip
             wrapperStyle={{ zIndex: 50 }}
@@ -108,16 +168,50 @@ export function StackedXpChart({
             }}
             formatter={(value: unknown, key: unknown) => {
               const k = String(key ?? "");
-              if (k === "_total") return [Number(value).toLocaleString(), "Tracked total"];
+              if (k === "_prior") return [Number(value).toLocaleString(), "Prior"];
+              if (k === "_total") return [Number(value).toLocaleString(), "Cumulative XP"];
+              if (k === "_pretrack") return [Number(value).toLocaleString(), "Pre-tracking"];
               return [Number(value).toLocaleString(), courseNames[k] ?? k];
             }}
             itemSorter={(item) => -(Number(item.value) || 0)}
           />
 
+          {hasPrior && (
+            <Area
+              type="linear"
+              dataKey="_prior"
+              stackId="xp"
+              stroke="transparent"
+              fill="#18181b"
+              fillOpacity={1}
+              strokeWidth={0}
+              dot={false}
+              isAnimationActive={false}
+              activeDot={false}
+              name="Prior"
+              legendType="none"
+            />
+          )}
+
+          {hasPretrack && (
+            <Area
+              type="linear"
+              dataKey="_pretrack"
+              stackId="xp"
+              stroke="#52525b"
+              fill="#3f3f46"
+              fillOpacity={0.55}
+              strokeWidth={1}
+              dot={false}
+              isAnimationActive={false}
+              name="Pre-tracking"
+            />
+          )}
+
           {sortedIds.map((id) => (
             <Area
               key={id}
-              type="monotone"
+              type="linear"
               dataKey={id}
               stackId="xp"
               stroke={colors[id]}
@@ -130,13 +224,13 @@ export function StackedXpChart({
           ))}
 
           <Line
-            type="monotone"
+            type="linear"
             dataKey="_total"
             stroke={CHART_TOTAL_COLOR}
             strokeWidth={2}
             dot={false}
             isAnimationActive={false}
-            name="Tracked total"
+            name="Cumulative XP"
           />
 
           {profileTotalXp > 0 && (
@@ -150,11 +244,17 @@ export function StackedXpChart({
         </ComposedChart>
       </ResponsiveContainer>
 
-      {/* Small inline legend for the two reference lines */}
-      <div className="flex gap-4 mt-1 px-1 text-xs text-zinc-500 justify-end">
+      {/* Inline legend for the non-language series */}
+      <div className="flex gap-4 mt-1 px-1 text-xs text-zinc-500 justify-end flex-wrap">
+        {hasPretrack && (
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: "#3f3f46" }} />
+            Pre-tracking
+          </span>
+        )}
         <span className="flex items-center gap-1.5">
           <span className="inline-block w-5 h-px" style={{ backgroundColor: CHART_TOTAL_COLOR }} />
-          Tracked
+          Cumulative XP
         </span>
         {profileTotalXp > 0 && (
           <span className="flex items-center gap-1.5">
@@ -164,7 +264,7 @@ export function StackedXpChart({
                 backgroundImage: `repeating-linear-gradient(to right, ${CHART_CEILING_COLOR} 0, ${CHART_CEILING_COLOR} 3px, transparent 3px, transparent 6px)`,
               }}
             />
-            Duolingo total
+            Profile total XP
           </span>
         )}
       </div>

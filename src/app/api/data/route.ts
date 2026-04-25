@@ -53,8 +53,22 @@ export async function GET(request: NextRequest) {
       }
 
       case "course-xp-history": {
-        const days = searchParams.get("days");
-        return NextResponse.json(getCourseXpHistory(days ? parseInt(days) : undefined));
+        const daysParam = searchParams.get("days");
+        const stackParam = searchParams.get("stack");
+        if (daysParam === "all") {
+          return NextResponse.json(getCourseXpHistory(undefined, "delta"));
+        }
+        if (!daysParam) {
+          if (stackParam === "delta") {
+            return NextResponse.json(getCourseXpHistory(undefined, "delta"));
+          }
+          return NextResponse.json(getCourseXpHistory(undefined, "cumulative"));
+        }
+        const n = parseInt(daysParam, 10);
+        if (!Number.isFinite(n) || n < 1) {
+          return NextResponse.json({ error: "Invalid days" }, { status: 400 });
+        }
+        return NextResponse.json(getCourseXpHistory(n, "delta"));
       }
 
       case "course-xp-daily-history": {

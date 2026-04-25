@@ -178,8 +178,26 @@ export function getSkillDecay(courseId: string) {
   `).all(courseId, courseId, courseId) as Array<Record<string, unknown>>;
 }
 
-export function getCourseXpHistory(days?: number): Array<Record<string, unknown>> {
+export type CourseXpHistoryStack = "delta" | "cumulative";
+
+/**
+ * Stacked XP history for the History page chart.
+ *
+ * - `stack` defaults: bounded `days` → `"delta"`; no `days` → `"cumulative"` (full-span totals).
+ * - `"delta"`: per-course values are gains from a pre-window / first-seen baseline; `_prior`
+ *   lifts the stack so the Y axis can zoom on growth. Use with `days` (last N days) or
+ *   without `days` for full-span gains (“All time” in the gain group).
+ * - `"cumulative"`: per-course values are total XP over time (requires no bounded `days`).
+ */
+export function getCourseXpHistory(
+  days?: number,
+  stack?: CourseXpHistoryStack,
+): Array<Record<string, unknown>> {
   const db = getDb();
+  const hasDayCount = typeof days === "number" && days > 0;
+  const resolvedStack: CourseXpHistoryStack =
+    stack ?? (hasDayCount ? "delta" : "cumulative");
+  const useDelta = resolvedStack === "delta";
 
   const toDateStr = (d: Date) => {
     const y = d.getFullYear();
@@ -191,19 +209,45 @@ export function getCourseXpHistory(days?: number): Array<Record<string, unknown>
   const today = new Date();
   const todayStr = toDateStr(today);
 
+  // Anchors for the "ideal cumulative" curve driving _pretrack and _total:
+  //   idealAt(D) = anchor + sum(xp_daily.gained_xp for date <= D)
+  // At D = today (or the latest xp_daily row), idealAt collapses to
+  // profile.total_xp by construction. Anchor absorbs XP earned outside
+  // xp_daily's ~1-year horizon plus any instantaneous lag between
+  // profile.total_xp and the latest xp_daily aggregate.
+  const profileRow = db.prepare(
+    "SELECT total_xp FROM user_profile WHERE id = 1"
+  ).get() as { total_xp: number } | undefined;
+  const profileTotalXp = profileRow?.total_xp ?? 0;
+  const xpDailySumRow = db.prepare(
+    "SELECT COALESCE(SUM(gained_xp), 0) as s FROM xp_daily"
+  ).get() as { s: number };
+  const sumAllXpDaily = xpDailySumRow.s;
+  const anchor = Math.max(0, profileTotalXp - sumAllXpDaily);
+  const haveIdeal = profileTotalXp > 0;
+
   // Determine window start date. `days = N` means "last N calendar days
   // including today", so walking startStr..todayStr inclusive yields N rows.
+  // All-time mode extends backward to min(first snapshot, first xp_daily)
+  // so the chart shows pre-tracking history driven by xp_daily.
   let startStr: string;
-  if (days) {
+  if (useDelta && hasDayCount) {
     const s = new Date(today);
-    s.setDate(s.getDate() - (days - 1));
+    s.setDate(s.getDate() - (days! - 1));
     startStr = toDateStr(s);
   } else {
-    const row = db.prepare(
+    const snapRow = db.prepare(
       "SELECT MIN(DATE(snapshot_time)) as d FROM course_snapshots"
     ).get() as { d: string | null };
-    if (!row?.d) return [];
-    startStr = row.d;
+    const xpRow = db.prepare(
+      "SELECT MIN(date) as d FROM xp_daily"
+    ).get() as { d: string | null };
+    const candidates = [snapRow?.d, xpRow?.d].filter(
+      (v): v is string => !!v,
+    );
+    if (candidates.length === 0) return [];
+    candidates.sort();
+    startStr = candidates[0];
   }
 
   // All distinct course IDs — alphabetical for stable color assignment
@@ -213,11 +257,9 @@ export function getCourseXpHistory(days?: number): Array<Record<string, unknown>
     ).all() as Array<{ course_id: string }>
   ).map((r) => r.course_id);
 
-  if (courseIds.length === 0) return [];
-
   // Baseline: last known xp per course strictly before the window start
   const lastKnown: Record<string, number> = {};
-  if (days) {
+  if (useDelta) {
     (
       db.prepare(`
         SELECT cs.course_id, cs.xp
@@ -232,6 +274,11 @@ export function getCourseXpHistory(days?: number): Array<Record<string, unknown>
     ).forEach((b) => { lastKnown[b.course_id] = b.xp; });
   }
 
+  // Delta mode: baselines from before the window (or first in-window
+  // snapshot) so each course row is XP gained. Cumulative mode: empty
+  // baselines; rows are total XP per course.
+  const baselineCourses: Record<string, number> = useDelta ? { ...lastKnown } : {};
+
   // All snapshots from startStr onward — dedup to last per (course_id, date)
   const byDay = new Map<string, number>();
   (
@@ -243,25 +290,80 @@ export function getCourseXpHistory(days?: number): Array<Record<string, unknown>
     `).all(startStr) as Array<{ course_id: string; date: string; xp: number }>
   ).forEach((r) => { byDay.set(`${r.course_id}\0${r.date}`, r.xp); });
 
-  // Walk date range, forward-filling each course's last known value
+  // xp_daily running total — walked in lockstep with the date loop below
+  const xpDailyRows = db.prepare(
+    "SELECT date, gained_xp FROM xp_daily ORDER BY date ASC"
+  ).all() as Array<{ date: string; gained_xp: number }>;
+
+  // Advance cumulative xp_daily up to (but not including) the window start.
+  let xpDailyIdx = 0;
+  let cumXpDailyPreWindow = 0;
+  while (
+    xpDailyIdx < xpDailyRows.length &&
+    xpDailyRows[xpDailyIdx].date < startStr
+  ) {
+    cumXpDailyPreWindow += xpDailyRows[xpDailyIdx].gained_xp;
+    xpDailyIdx++;
+  }
+  let cumXpDaily = cumXpDailyPreWindow;
+
+  const baselineSum = Object.values(baselineCourses).reduce(
+    (a, b) => a + b,
+    0,
+  );
+  const idealAtD0 = haveIdeal ? anchor + cumXpDailyPreWindow : baselineSum;
+  const prior = useDelta ? Math.max(idealAtD0, baselineSum) : 0;
+
+  // Walk date range, forward-filling each course and advancing cumXpDaily.
   const result: Array<Record<string, unknown>> = [];
   const cur = new Date(`${startStr}T12:00:00`);
   const endMs = new Date(`${todayStr}T12:00:00`).getTime();
 
   while (cur.getTime() <= endMs) {
     const date = toDateStr(cur);
+
+    while (
+      xpDailyIdx < xpDailyRows.length &&
+      xpDailyRows[xpDailyIdx].date <= date
+    ) {
+      cumXpDaily += xpDailyRows[xpDailyIdx].gained_xp;
+      xpDailyIdx++;
+    }
+
     for (const courseId of courseIds) {
       const val = byDay.get(`${courseId}\0${date}`);
-      if (val !== undefined) lastKnown[courseId] = val;
+      if (val !== undefined) {
+        if (useDelta && baselineCourses[courseId] === undefined) {
+          baselineCourses[courseId] = val;
+        }
+        lastKnown[courseId] = val;
+      }
     }
+
     const row: Record<string, unknown> = { date };
-    let total = 0;
+    let sumCourses = 0;
+    let sumDeltas = 0;
     for (const courseId of courseIds) {
-      const val = lastKnown[courseId] ?? 0;
-      row[courseId] = val;
-      total += val;
+      const current = lastKnown[courseId] ?? 0;
+      sumCourses += current;
+      if (useDelta) {
+        const base = baselineCourses[courseId] ?? 0;
+        const delta = Math.max(0, current - base);
+        row[courseId] = delta;
+        sumDeltas += delta;
+      } else {
+        row[courseId] = current;
+      }
     }
+
+    const idealAt = haveIdeal ? anchor + cumXpDaily : 0;
+    const total = Math.max(idealAt, sumCourses);
+    row._prior = prior;
+    row._pretrack = haveIdeal
+      ? Math.max(0, total - prior - (useDelta ? sumDeltas : sumCourses))
+      : 0;
     row._total = total;
+
     result.push(row);
     cur.setDate(cur.getDate() + 1);
   }

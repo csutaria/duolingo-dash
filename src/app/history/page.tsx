@@ -8,12 +8,13 @@ import { StackedXpChart } from "@/components/StackedXpChart";
 import { DailyMetricChart } from "@/components/DailyMetricChart";
 import { assignCourseColors } from "@/lib/colors";
 
-const RANGES = [
-  { label: "1 day", days: "1" },
-  { label: "7 days", days: "7" },
-  { label: "30 days", days: "30" },
-  { label: "90 days", days: "90" },
-  { label: "All time", days: "" },
+/** History chart: XP gained (delta stack) for each window. */
+const XP_GAIN_RANGES = [
+  { id: "1" as const, label: "1 day" },
+  { id: "7" as const, label: "7 days" },
+  { id: "30" as const, label: "30 days" },
+  { id: "90" as const, label: "90 days" },
+  { id: "all" as const, label: "All time" },
 ];
 
 const METRICS = [
@@ -21,25 +22,48 @@ const METRICS = [
   { label: "Sessions", value: "sessions" as const },
 ];
 
-export default function HistoryPage() {
-  const [range, setRange] = useState("30");
-  const [metric, setMetric] = useState<"time" | "sessions">("time");
-  const params = range ? { days: range } : undefined;
+type HistoryXpViewId = (typeof XP_GAIN_RANGES)[number]["id"] | "total";
 
-  const { data: xpDaily, loading } = useData<Array<Record<string, unknown>>>("xp-daily", params);
+/** Time-window pills only (delta / XP gained). */
+const HISTORY_SEGMENT_GROUP =
+  "inline-flex items-center gap-0.5 rounded-lg border border-zinc-800 bg-zinc-950 p-0.5";
+
+function historySegmentBtnClass(selected: boolean) {
+  return `px-3 py-1.5 rounded-md text-sm whitespace-nowrap transition-colors ${
+    selected ? "bg-zinc-700 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800"
+  }`;
+}
+
+export default function HistoryPage() {
+  const [view, setView] = useState<HistoryXpViewId>("total");
+  const [metric, setMetric] = useState<"time" | "sessions">("time");
+
+  const xpDailyParams = useMemo(() => {
+    if (view === "total" || view === "all") return undefined;
+    return { days: view };
+  }, [view]);
+
+  const courseXpHistoryParams = useMemo(() => {
+    if (view === "total") return undefined;
+    if (view === "all") return { days: "all" };
+    return { days: view };
+  }, [view]);
+
+  const { data: xpDaily, loading } = useData<Array<Record<string, unknown>>>("xp-daily", xpDailyParams);
   const { data: xpStats } = useData<Record<string, unknown>>("xp-stats");
   const { data: stackData } = useData<Array<Record<string, unknown>>>(
     "course-xp-history",
-    params
+    courseXpHistoryParams,
   );
   const { data: courses } = useData<Array<Record<string, unknown>>>("course-comparison");
   const { data: streakEpochs } = useData<Array<Record<string, unknown>>>("streak-epochs");
 
-  const xpDomainStart = range ? (() => {
+  const xpDomainStart = useMemo(() => {
+    if (view === "total" || view === "all") return undefined;
     const d = new Date();
-    d.setDate(d.getDate() - (Number(range) - 1));
+    d.setDate(d.getDate() - (Number(view) - 1));
     return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12).getTime();
-  })() : undefined;
+  }, [view]);
 
   const allCourseIds = useMemo(() => {
     if (!courses) return [];
@@ -50,15 +74,32 @@ export default function HistoryPage() {
 
   const courseIds = useMemo(() => {
     if (!stackData?.length) return [];
-    return Object.keys(stackData[0]).filter((k) => k !== "date" && k !== "_total");
+    return Object.keys(stackData[0]).filter(
+      (k) =>
+        k !== "date" &&
+        k !== "_total" &&
+        k !== "_pretrack" &&
+        k !== "_prior",
+    );
   }, [stackData]);
 
-  const activeInWindow = useMemo(() => {
-    if (!stackData || stackData.length < 2) return new Set<string>();
-    const first = stackData[0];
+  const isGainView = view !== "total";
+
+  const windowXp = useMemo(() => {
+    if (!isGainView || !stackData?.length) return null;
     const last = stackData[stackData.length - 1];
-    return new Set(courseIds.filter((id) => Number(last[id] ?? 0) > Number(first[id] ?? 0)));
-  }, [stackData, courseIds]);
+    const map: Record<string, number> = {};
+    for (const id of courseIds) map[id] = Number(last[id] ?? 0);
+    return map;
+  }, [isGainView, stackData, courseIds]);
+
+  // Same idea as Overview: a course is "active" if it has any non-zero gain on any day in the chart window.
+  const activeInWindow = useMemo(() => {
+    if (!isGainView || !stackData?.length) return new Set<string>();
+    return new Set(
+      courseIds.filter((id) => stackData.some((row) => Number(row[id] ?? 0) > 0)),
+    );
+  }, [isGainView, stackData, courseIds]);
 
   const courseNames = useMemo(() => {
     const map: Record<string, string> = {};
@@ -68,7 +109,28 @@ export default function HistoryPage() {
     return map;
   }, [courses]);
 
-  const rangeLabel = RANGES.find((r) => r.days === range)?.label ?? "Selected period";
+  const rangeLabel = useMemo(() => {
+    if (view === "total") return "All time Total";
+    const hit = XP_GAIN_RANGES.find((r) => r.id === view);
+    return hit?.label ?? "Selected period";
+  }, [view]);
+
+  // Gain views: match Overview — active courses first by window XP desc, then inactive by total XP desc.
+  const sortedCourses = useMemo(() => {
+    if (!courses?.length) return [];
+    if (!isGainView || !windowXp) {
+      return [...courses].sort((a, b) => Number(b.xp) - Number(a.xp));
+    }
+    return [...courses].sort((a, b) => {
+      const aId = String(a.course_id);
+      const bId = String(b.course_id);
+      const aActive = activeInWindow.has(aId) ? 0 : 1;
+      const bActive = activeInWindow.has(bId) ? 0 : 1;
+      if (aActive !== bActive) return aActive - bActive;
+      if (aActive === 0) return (windowXp[bId] ?? 0) - (windowXp[aId] ?? 0);
+      return Number(b.xp) - Number(a.xp);
+    });
+  }, [courses, isGainView, windowXp, activeInWindow]);
 
   const profileTotalXp = useMemo(() => {
     if (!stackData?.length) return 0;
@@ -95,22 +157,50 @@ export default function HistoryPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h2 className="text-xl font-bold">History</h2>
-        <div className="flex gap-1">
-          {RANGES.map((r) => (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <div className={HISTORY_SEGMENT_GROUP}>
+            {XP_GAIN_RANGES.map((r) => (
+              <button
+                key={r.id}
+                type="button"
+                onClick={() => setView(r.id)}
+                className={historySegmentBtnClass(view === r.id)}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+          <span
+            className={`text-xs shrink-0 select-none px-0.5 ${
+              isGainView ? "text-zinc-300 font-medium" : "text-zinc-500"
+            }`}
+          >
+            Change
+          </span>
+          <div
+            className="hidden sm:block w-px h-6 bg-zinc-600 shrink-0 self-center"
+            role="separator"
+            aria-orientation="vertical"
+          />
+          <div className="sm:hidden w-full h-px bg-zinc-700 shrink-0" role="separator" />
+          <div className={HISTORY_SEGMENT_GROUP}>
             <button
-              key={r.days}
-              onClick={() => setRange(r.days)}
-              className={`px-3 py-1.5 rounded text-sm transition-colors ${
-                range === r.days
-                  ? "bg-zinc-700 text-zinc-100"
-                  : "text-zinc-400 hover:bg-zinc-800"
-              }`}
+              type="button"
+              onClick={() => setView("total")}
+              className={historySegmentBtnClass(view === "total")}
             >
-              {r.label}
+              All time
             </button>
-          ))}
+          </div>
+          <span
+            className={`text-xs shrink-0 select-none px-0.5 ${
+              view === "total" ? "text-zinc-300 font-medium" : "text-zinc-500"
+            }`}
+          >
+            Total
+          </span>
         </div>
       </div>
 
@@ -142,14 +232,21 @@ export default function HistoryPage() {
             profileTotalXp={profileTotalXp}
             domainStart={xpDomainStart}
           />
-          <p className="text-xs text-zinc-600 mt-1">Cumulative XP per language</p>
+          <p className="text-xs text-zinc-600 mt-1">
+            <span className="text-zinc-300 font-medium">
+              {isGainView ? "XP gained per language" : "Cumulative XP per language"}
+            </span>{" "}
+            <span aria-hidden="true">·</span>{" "}
+            <span>{rangeLabel}</span>
+          </p>
         </div>
       )}
 
-      {courses && courses.length > 0 && (
+      {sortedCourses.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {courses.map((c) => {
+          {sortedCourses.map((c) => {
             const cId = String(c.course_id);
+            const isActive = activeInWindow.has(cId);
             return (
               <CourseCard
                 key={cId}
@@ -163,7 +260,9 @@ export default function HistoryPage() {
                 totalSkills={c.total_skills != null ? Number(c.total_skills) : undefined}
                 completedSkills={c.completed_skills != null ? Number(c.completed_skills) : undefined}
                 inProgressSkills={c.in_progress_skills != null ? Number(c.in_progress_skills) : undefined}
-                indicatorColor={activeInWindow.has(cId) ? colorMap[cId] : undefined}
+                indicatorColor={isGainView ? (isActive ? colorMap[cId] : undefined) : colorMap[cId]}
+                windowXp={windowXp ? (windowXp[cId] ?? 0) : undefined}
+                dimmed={isGainView && !isActive}
               />
             );
           })}
@@ -179,6 +278,7 @@ export default function HistoryPage() {
                 {METRICS.map((m) => (
                   <button
                     key={m.value}
+                    type="button"
                     onClick={() => setMetric(m.value)}
                     className={`px-2.5 py-1 rounded text-xs transition-colors ${
                       metric === m.value
