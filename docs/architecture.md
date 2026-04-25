@@ -156,6 +156,7 @@ Pause does not: call Duolingo directly, touch the real Duolingo app or account, 
 ## Cross-reference
 
 - `**docs/api-map.md`** — Duolingo endpoints, `language_data` key resolution, `xp_daily` aggregates.
+- `**docs/history-xp-semantics.md`** — History/Overview chart selector semantics, delta vs cumulative decisions, and current open chart follow-ups.
 - `**TESTING.md**` — what's covered, how to run, future test backlog.
 - `**README.md**` — user-facing setup and behavior.
 - `**CLAUDE.md**` / `**AGENTS.md**` — agent-oriented notes.

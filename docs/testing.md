@@ -46,6 +46,10 @@ Additional invariants exercised across files:
 - `ts-jest` compiles on the fly; no separate build step before testing.
 - Never hit duolingo.com from a test. If a test needs `DuolingoClient`, stub it.
 
+## History chart decisions
+
+Decision/status notes for History/Overview XP semantics live in `docs/history-xp-semantics.md`.
+
 ## Backlog
 
 Planned tests, grouped by surface. Roughly priority-ordered within each group. Items marked `[x]` have landed; promote them into the **Current coverage** table once their home file stabilizes.
@@ -85,9 +89,11 @@ Logic is non-trivial and directly drives chart coloring correctness. All three f
 
 Core of both features is non-trivial JS computation in `queries.ts`. UI is intentionally untested; the data layer is not.
 
-**`getCourseXpHistory` (cumulative, History page):**
+**`getCourseXpHistory` (History page, delta/cumulative modes):**
 - Forward-fill — sparse snapshots per course: each date carries the most recent prior `xp`, not zero.
-- `_total` per date — sum of forward-filled course values; must not mix in `profile.total_xp` or `xp_daily` cumulative sums.
+- Mode handling:
+  - delta mode (`days=N` or `days=all`) stores per-course gains, uses `_prior` baseline floor, and preserves `_prior + _pretrack + Σcourses = _total`.
+  - cumulative mode (no `days`) stores per-course totals, `_prior = 0`, `_pretrack` bridges to the ideal/profile-aligned total.
 - Edge cases: no snapshots in window; single snapshot (forward-fill to end of range).
 
 **`getCourseXpDailyHistory` (incremental, Overview page):**
