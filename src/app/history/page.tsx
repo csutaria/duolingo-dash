@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useData } from "@/lib/hooks";
 import { StatCard } from "@/components/StatCard";
 import { CourseCard } from "@/components/CourseCard";
+import { MetaSeriesCard } from "@/components/MetaSeriesCard";
 import { StackedXpChart } from "@/components/StackedXpChart";
 import { DailyMetricChart } from "@/components/DailyMetricChart";
 import { assignCourseColors } from "@/lib/colors";
@@ -137,6 +138,11 @@ export default function HistoryPage() {
     return Number(stackData[stackData.length - 1]._total ?? 0);
   }, [stackData]);
 
+  const pretrackXp = useMemo(() => {
+    if (!stackData?.length) return 0;
+    return Number(stackData[stackData.length - 1]._pretrack ?? 0);
+  }, [stackData]);
+
   const filteredStats = xpDaily
     ? {
         total: xpDaily.reduce((s, d) => s + Number(d.gained_xp || 0), 0),
@@ -266,6 +272,18 @@ export default function HistoryPage() {
               />
             );
           })}
+          <MetaSeriesCard
+            title="Pre-tracking"
+            value={pretrackXp}
+            label={isGainView ? "Window XP" : "All-time XP"}
+            subtitle={
+              isGainView
+                ? "XP implied by totals that is outside per-language gains in this window."
+                : "XP inferred before complete per-language tracking was available."
+            }
+            indicatorColor="#3f3f46"
+            dimmed={pretrackXp <= 0}
+          />
         </div>
       )}
 

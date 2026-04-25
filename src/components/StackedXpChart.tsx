@@ -246,12 +246,6 @@ export function StackedXpChart({
 
       {/* Inline legend for the non-language series */}
       <div className="flex gap-4 mt-1 px-1 text-xs text-zinc-500 justify-end flex-wrap">
-        {hasPretrack && (
-          <span className="flex items-center gap-1.5">
-            <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: "#3f3f46" }} />
-            Pre-tracking
-          </span>
-        )}
         <span className="flex items-center gap-1.5">
           <span className="inline-block w-5 h-px" style={{ backgroundColor: CHART_TOTAL_COLOR }} />
           Cumulative XP

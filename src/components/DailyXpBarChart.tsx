@@ -109,14 +109,6 @@ export function DailyXpBarChart({
           )}
         </BarChart>
       </ResponsiveContainer>
-      {hasUntracked && (
-        <div className="flex gap-4 mt-1 px-1 text-xs text-zinc-500 justify-end">
-          <span className="flex items-center gap-1.5">
-            <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: "#3f3f46" }} />
-            Untracked
-          </span>
-        </div>
-      )}
     </div>
   );
 }

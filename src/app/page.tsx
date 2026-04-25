@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useData } from "@/lib/hooks";
 import { StatCard } from "@/components/StatCard";
 import { CourseCard } from "@/components/CourseCard";
+import { MetaSeriesCard } from "@/components/MetaSeriesCard";
 import { DailyXpBarChart } from "@/components/DailyXpBarChart";
 import { assignCourseColors } from "@/lib/colors";
 
@@ -65,6 +66,15 @@ export default function Overview() {
     }
     return map;
   }, [dailyData, courseIds]);
+
+  const untrackedXp = useMemo(
+    () =>
+      (dailyData ?? []).reduce(
+        (sum, d) => sum + Number(d._untracked ?? 0),
+        0,
+      ),
+    [dailyData],
+  );
 
   // Active-in-window first sorted by window XP desc, then inactive by total XP desc
   const sortedCourses = useMemo(() => {
@@ -240,6 +250,14 @@ export default function Overview() {
               />
             );
           })}
+          <MetaSeriesCard
+            title="Untracked"
+            value={untrackedXp}
+            label="Window XP"
+            subtitle="XP not attributable to a specific language snapshot in this window."
+            indicatorColor="#3f3f46"
+            dimmed={untrackedXp <= 0}
+          />
         </div>
       </section>
     </div>
