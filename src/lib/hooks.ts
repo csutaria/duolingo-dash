@@ -7,32 +7,46 @@ export function useData<T>(query: string, params?: Record<string, string>) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchData = useCallback(async () => {
+  // `params` changes on every render (object literal callers), but we
+  // re-derive identity on JSON content so AbortController can replace
+  // the in-flight request only when the request actually changes.
+  // Stale fetches must be aborted, not just ignored: without abort, a
+  // late-arriving response from the prior params (e.g. the default
+  // `days=30` request kicked off before localStorage hydrates the
+  // user's chosen window to `7`) would call `setData` after the new
+  // request resolved and silently overwrite the correct data.
+  const fetchData = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
     try {
       const sp = new URLSearchParams({ q: query, ...params });
-      const res = await fetch(`/api/data?${sp}`);
+      const res = await fetch(`/api/data?${sp}`, { signal });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `HTTP ${res.status}`);
       }
       const json = await res.json();
+      if (signal?.aborted) return;
       setData(json);
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (signal?.aborted) return;
       setError(err instanceof Error ? err.message : "Failed to load data");
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [query, params ? JSON.stringify(params) : ""]);
 
   useEffect(() => {
-    fetchData();
+    const controller = new AbortController();
+    fetchData(controller.signal);
+    return () => controller.abort();
   }, [fetchData]);
 
   useEffect(() => {
-    window.addEventListener(SYNC_COMPLETE_EVENT, fetchData);
-    return () => window.removeEventListener(SYNC_COMPLETE_EVENT, fetchData);
+    const onSync = () => fetchData();
+    window.addEventListener(SYNC_COMPLETE_EVENT, onSync);
+    return () => window.removeEventListener(SYNC_COMPLETE_EVENT, onSync);
   }, [fetchData]);
 
   return { data, error, loading, refetch: fetchData };

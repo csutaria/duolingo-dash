@@ -1,29 +1,22 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useData } from "@/lib/hooks";
 import { StatCard } from "@/components/StatCard";
 import { CourseCard } from "@/components/CourseCard";
 import { MetaSeriesCard } from "@/components/MetaSeriesCard";
 import { DailyXpBarChart } from "@/components/DailyXpBarChart";
 import { assignCourseColors } from "@/lib/colors";
-
-const XP_RANGES = [
-  { label: "1d", days: "1", cardLabel: "1d" },
-  { label: "7d", days: "7", cardLabel: "7d" },
-  { label: "30d", days: "30", cardLabel: "30d" },
-  { label: "90d", days: "90", cardLabel: "90d" },
-  { label: "All", days: "", cardLabel: "All" },
-];
+import { getXpWindowOption, useSharedXpWindow, XP_WINDOW_OPTIONS } from "@/lib/xp-window";
 
 export default function Overview() {
   const { data: profile, loading: pLoading } = useData<Record<string, unknown>>("profile");
   const { data: courses } = useData<Array<Record<string, unknown>>>("course-comparison");
   const { data: xpStats } = useData<Record<string, unknown>>("xp-stats");
-  const [xpRange, setXpRange] = useState("30");
+  const [xpRange, setXpRange] = useSharedXpWindow("30");
   const { data: dailyData } = useData<Array<Record<string, unknown>>>(
     "course-xp-daily-history",
-    xpRange ? { days: xpRange } : undefined
+    xpRange !== "all" ? { days: xpRange } : undefined
   );
 
   // Stable color assignment from full course list — shared with XP history page
@@ -76,8 +69,7 @@ export default function Overview() {
     [dailyData],
   );
 
-  const windowXpLabel =
-    XP_RANGES.find((r) => r.days === xpRange)?.cardLabel ?? "selected period";
+  const windowXpLabel = getXpWindowOption(xpRange)?.cardLabel ?? "selected period";
 
   // Active-in-window first sorted by window XP desc, then inactive by total XP desc
   const sortedCourses = useMemo(() => {
@@ -201,12 +193,12 @@ export default function Overview() {
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-lg font-semibold">Daily XP</h3>
             <div className="flex gap-1">
-              {XP_RANGES.map((r) => (
+              {XP_WINDOW_OPTIONS.map((r) => (
                 <button
-                  key={r.days}
-                  onClick={() => setXpRange(r.days)}
+                  key={r.value}
+                  onClick={() => setXpRange(r.value)}
                   className={`px-2 py-1 rounded text-xs transition-colors ${
-                    xpRange === r.days
+                    xpRange === r.value
                       ? "bg-zinc-700 text-zinc-100"
                       : "text-zinc-400 hover:bg-zinc-800"
                   }`}

@@ -8,22 +8,20 @@ import { MetaSeriesCard } from "@/components/MetaSeriesCard";
 import { StackedXpChart } from "@/components/StackedXpChart";
 import { DailyMetricChart } from "@/components/DailyMetricChart";
 import { assignCourseColors } from "@/lib/colors";
-
-/** History chart: XP gained (delta stack) for each window. */
-const XP_GAIN_RANGES = [
-  { id: "1" as const, label: "1 day", cardLabel: "1d" },
-  { id: "7" as const, label: "7 days", cardLabel: "7d" },
-  { id: "30" as const, label: "30 days", cardLabel: "30d" },
-  { id: "90" as const, label: "90 days", cardLabel: "90d" },
-  { id: "all" as const, label: "All time", cardLabel: "All" },
-];
+import {
+  getXpWindowOption,
+  useHistoryAllView,
+  useSharedXpWindow,
+  type XpWindow,
+  XP_WINDOW_OPTIONS,
+} from "@/lib/xp-window";
 
 const METRICS = [
   { label: "Time", value: "time" as const },
   { label: "Sessions", value: "sessions" as const },
 ];
 
-type HistoryXpViewId = (typeof XP_GAIN_RANGES)[number]["id"] | "total";
+type HistoryXpViewId = XpWindow | "total";
 
 /** Time-window pills only (delta / XP gained). */
 const HISTORY_SEGMENT_GROUP =
@@ -36,8 +34,10 @@ function historySegmentBtnClass(selected: boolean) {
 }
 
 export default function HistoryPage() {
-  const [view, setView] = useState<HistoryXpViewId>("total");
+  const [xpWindow, setXpWindow] = useSharedXpWindow("30");
+  const [historyAllView, setHistoryAllView] = useHistoryAllView("total");
   const [metric, setMetric] = useState<"time" | "sessions">("time");
+  const view: HistoryXpViewId = xpWindow === "all" ? historyAllView : xpWindow;
 
   const xpDailyParams = useMemo(() => {
     if (view === "total" || view === "all") return undefined;
@@ -119,13 +119,20 @@ export default function HistoryPage() {
 
   const rangeLabel = useMemo(() => {
     if (view === "total") return "All time Total";
-    const hit = XP_GAIN_RANGES.find((r) => r.id === view);
-    return hit?.label ?? "Selected period";
+    return getXpWindowOption(view)?.fullLabel ?? "Selected period";
   }, [view]);
 
-  const windowXpLabel = isGainView
-    ? XP_GAIN_RANGES.find((r) => r.id === view)?.cardLabel
-    : undefined;
+  const windowXpLabel = view !== "total" ? getXpWindowOption(view)?.cardLabel : undefined;
+
+  function selectGainWindow(next: XpWindow) {
+    if (next === "all") setHistoryAllView("all");
+    setXpWindow(next);
+  }
+
+  function selectTotalView() {
+    setHistoryAllView("total");
+    setXpWindow("all");
+  }
 
   // Gain views: match Overview — active courses first by window XP desc, then inactive by total XP desc.
   const sortedCourses = useMemo(() => {
@@ -178,12 +185,12 @@ export default function HistoryPage() {
         <h2 className="text-xl font-bold">History</h2>
         <div className="flex flex-wrap items-center gap-1.5">
           <div className={HISTORY_SEGMENT_GROUP}>
-            {XP_GAIN_RANGES.map((r) => (
+            {XP_WINDOW_OPTIONS.map((r) => (
               <button
-                key={r.id}
+                key={r.value}
                 type="button"
-                onClick={() => setView(r.id)}
-                className={historySegmentBtnClass(view === r.id)}
+                onClick={() => selectGainWindow(r.value)}
+                className={historySegmentBtnClass(view === r.value)}
               >
                 {r.label}
               </button>
@@ -205,7 +212,7 @@ export default function HistoryPage() {
           <div className={HISTORY_SEGMENT_GROUP}>
             <button
               type="button"
-              onClick={() => setView("total")}
+              onClick={selectTotalView}
               className={historySegmentBtnClass(view === "total")}
             >
               All time
