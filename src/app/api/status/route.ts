@@ -11,6 +11,7 @@ import { getSyncStatus } from "@/lib/queries";
 import { getCurrentSync } from "@/lib/sync-state";
 import { getMedianDurationMs } from "@/lib/db";
 import { getResolvedTimezone, getResolvedTimezoneSource } from "@/lib/tz";
+import { getAppSettings } from "@/lib/app-settings";
 import { isReadOnlyMode } from "@/lib/read-only";
 
 const DEMO_MODE = process.env.DEMO_MODE === "true";
@@ -22,6 +23,7 @@ export async function GET() {
       readOnly: isReadOnlyMode(),
       resolvedTimezone: getResolvedTimezone(),
       resolvedTimezoneSource: getResolvedTimezoneSource(),
+      timezoneOverride: null,
     });
   }
 
@@ -31,11 +33,16 @@ export async function GET() {
     // status fields are meaningless; return only what the UI needs to
     // render the "Read-only" banner and the timezone row. `dbStatus`
     // is still safe to read (read-only SELECTs).
+    // `timezoneOverride` is read defensively: a read-only instance
+    // pointed at an un-migrated DB won't have the `app_settings`
+    // table — `getAppSettings()` already returns NULL defaults in that
+    // case, so this is a safe call.
     return NextResponse.json({
       authenticated: false,
       readOnly: true,
       resolvedTimezone: getResolvedTimezone(),
       resolvedTimezoneSource: getResolvedTimezoneSource(),
+      timezoneOverride: getAppSettings().timezone_override,
       polling: false,
       paused: false,
       currentlyRunning: false,
@@ -69,6 +76,7 @@ export async function GET() {
     readOnly: false,
     resolvedTimezone: getResolvedTimezone(),
     resolvedTimezoneSource: getResolvedTimezoneSource(),
+    timezoneOverride: getAppSettings().timezone_override,
     polling: isPolling(),
     paused: isUserPaused(),
     currentlyRunning: isCurrentlyRunning(),

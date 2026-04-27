@@ -58,31 +58,34 @@ The app uses two timezone concepts:
 - **S (host/system timezone):** the machine/process timezone (`Intl` on that host).
 - **R (resolved app timezone):** the timezone used for all day-boundary logic.
 
-`R` priority:
+`R` priority (highest first):
 
-1. `DUOLINGO_TZ` env var (explicit override)
-2. Duolingo profile timezone (`user_profile.timezone`, filled from Duolingo user `timezone` on sync)
-3. Host/system timezone (`Intl.DateTimeFormat().resolvedOptions().timeZone`)
+1. **UI override** — `app_settings.timezone_override` set via the SyncBar "Override" input or `POST /api/settings { timezoneOverride }`. Reported as `resolvedTimezoneSource: "settings"`.
+2. `DUOLINGO_TZ` env var. Reported as `"env"`.
+3. Duolingo profile timezone (`user_profile.timezone`, filled from Duolingo user `timezone` on sync). Reported as `"profile"`.
+4. Host/system timezone (`Intl.DateTimeFormat().resolvedOptions().timeZone`). Reported as `"system"`.
+
+Both the settings and profile sources are wired into `tz.ts` via setter functions (`setSettingsTimezoneLoader`, `setProfileTimezoneLoader`) called from `db.ts` at init, avoiding an import cycle. The resolver itself **never validates** IANA names and **never throws** — failures in either loader fall through silently. IANA validation is enforced upstream at the `POST /api/settings` boundary (invalid zones → 400). After any update to the override or the profile timezone, callers must invoke `invalidateResolvedTimezone()` so subsequent reads pick up the new value.
 
 Rules:
 
 - UTC timestamps are still stored as UTC in SQLite.
 - Any "which day is this?" decision must use **R**, not raw UTC and not host-local calendar extraction.
-- Nightly scheduling computes "next 02:00 in R" and then converts that wall-clock target to an epoch delay.
+- Nightly scheduling computes "next `effectiveNightlyHour():00` in R" and then converts that wall-clock target to an epoch delay.
 
 ### UTC-host deployment note
 
 If you deploy on a server configured to UTC, that only fixes **S**. It does **not** automatically mean "02:00 in your local timezone."
 
-- Without `DUOLINGO_TZ` (or a persisted profile timezone), `R` often falls through to `S=UTC`.
-- In that case nightly runs happen at **02:00 UTC**.
-- If you want nightly at, for example, Pacific time on a UTC host, set `DUOLINGO_TZ=America/Los_Angeles` (or persist/profile-source that zone once Phase 2 lands).
+- Without an override, `DUOLINGO_TZ`, or a persisted profile timezone, `R` falls through to `S=UTC` and nightly runs happen at **02:00 UTC**.
+- The fastest fix without a redeploy is the SyncBar "Override" input: set it to your IANA zone (e.g. `America/Los_Angeles`) and the resolver, the nightly scheduler, and every "which day" query pick it up immediately. Persisted in `app_settings.timezone_override`; survives process restarts.
+- For headless / pre-login configuration, set `DUOLINGO_TZ=America/Los_Angeles` in the environment.
 
 Deployment checklist (single-user/self-host):
 
 1. Pick the user's wall-clock zone (for example, `America/Los_Angeles`).
-2. Set `DUOLINGO_TZ` on the host to that IANA name.
-3. Verify at runtime that `msUntilNextNightlySync` (from `/api/status`) counts down to the next nightly hour in that zone.
+2. Either: set `DUOLINGO_TZ` on the host to that IANA name, **or** open the dashboard and set the SyncBar "Override" to that zone.
+3. Verify at runtime that `msUntilNextNightlySync` (from `/api/status`) counts down to the next nightly hour in that zone, and that `resolvedTimezoneSource` is `"settings"` or `"env"` (not `"system"`).
 4. Keep host OS timezone independent (UTC is fine). Scheduling uses **R**, not host-local midnight math.
 
 ## App settings (`app_settings` table)
@@ -92,7 +95,7 @@ Single-row (`id = 1`) SQLite table for user-editable preferences. Helpers in `sr
 | Column              | Type      | Default fallthrough                                | Consumer                                              |
 | ------------------- | --------- | -------------------------------------------------- | ----------------------------------------------------- |
 | `nightly_hour`      | INTEGER 0..23 | `null` → 2 (legacy `NIGHTLY_HOUR_DEFAULT`)         | `effectiveNightlyHour()` in `polling.ts`              |
-| `timezone_override` | TEXT (IANA)   | `null` → resolver chain (env → profile → host)     | (Reserved for C4; resolver wiring lands with C4)      |
+| `timezone_override` | TEXT (IANA)   | `null` → resolver chain (env → profile → host)     | `setSettingsTimezoneLoader()` in `tz.ts` (top of priority chain) |
 | `updated_at`        | TEXT      | `datetime('now')`                                  | Audit only                                            |
 
 Notes:
@@ -101,6 +104,7 @@ Notes:
 - `getAppSettings()` is read-side defensive: if the table or row is missing (e.g. read-only instance pointed at an un-migrated DB) it returns `{ nightly_hour: null, timezone_override: null }` rather than throwing.
 - The helpers live in their own module so consumers can `jest.doMock("./db", { getDb: () => testDb })` and have the helpers reach the mocked handle. Functions defined inside `db.ts` itself bypass module-level mocks because their internal `getDb()` reference resolves to the real binding.
 - Updating `nightly_hour` via `POST /api/settings` calls `rescheduleNightly()` so the next `setTimeout` is re-armed against the new hour without a process restart.
+- Updating `timezone_override` via `POST /api/settings` calls `invalidateResolvedTimezone()` so the next `getResolvedTimezone()` re-runs the chain and the change takes effect for every downstream consumer (UDF, queries, scheduler) in the next read.
 
 ## Nightly sync (selectable hour)
 
@@ -132,12 +136,12 @@ Activated by env: `DUOLINGO_READ_ONLY=1` (also `true`/`yes`, case-insensitive). 
 | `POST /api/sync` | Returns `503 { "error": "read-only" }`. |
 | `POST /api/sync-course` | Returns `503 { "error": "read-only" }`. |
 | `POST /api/polling` | Returns `503 { "error": "read-only" }`. |
-| `GET /api/status` | Returns `{ readOnly: true, authenticated: false, polling: false, dbStatus, resolvedTimezone, resolvedTimezoneSource, nightlyHour }` (other timer fields are nulled — they don't apply). `nightlyHour` is exposed so the read-only UI can render the same selector grayed-out. |
+| `GET /api/status` | Returns `{ readOnly: true, authenticated: false, polling: false, dbStatus, resolvedTimezone, resolvedTimezoneSource, timezoneOverride, nightlyHour }` (other timer fields are nulled — they don't apply). `nightlyHour` and `timezoneOverride` are exposed so the read-only UI can show the same settings rows grayed-out. `getAppSettings()` is read-defensive when the table is missing on an un-migrated DB. |
 | `SyncBar` UI | Renders a blue **"Read-only"** pill in place of Refresh / Sync All. The status panel shows "Display-only instance. Writes are disabled." instead of the pause toggle. The `Last sync` row + Timezone row still render from `dbStatus`. |
 
 Caveats and follow-ups (these are why this is a "display" mode, not "follower" mode):
 
-- The resolver cache in `src/lib/tz.ts` is per-process. If the writer learns a new Duolingo profile timezone, the read-only process won't see it until restart unless it re-resolves on demand. Acceptable for now; tracked in `docs/multi-server.md` (planned C5).
+- The resolver cache in `src/lib/tz.ts` is per-process. If the writer learns a new Duolingo profile timezone, or if the user changes the `app_settings.timezone_override` from another instance, the read-only process won't see it until restart — `invalidateResolvedTimezone()` is only fired in the process that handled the write. Acceptable for now; tracked in `docs/multi-server.md` (planned C5).
 - `dbStatus` reflects the writer's last sync — the read-only process never updates `sync_log`. The UI should not interpret "no recent sync" as a problem on a read-only instance.
 - The DB file must be reachable by both processes (same host, shared filesystem, or copy). SQLite WAL is concurrent-read-safe with a single writer, which is the configuration we expect here.
 
@@ -226,9 +230,9 @@ Progress is derived client-side as `min(1, elapsed / expectedDurationMs[type])` 
 
 | Route              | Method                                              | Purpose                                                                                                                                                                                             |
 | ------------------ | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/api/status`      | `GET`                                               | Auth state, polling on/off, `paused`, `currentlyRunning`, `currentSync`, `expectedDurationMs.{single,cycle}`, last sync result, DB status, `msUntilNextXpCheck`, `msUntilNextNightlySync`, `syncMode` (`"baseline"`/`"fast"`), `fastIdleTicks`, `fastIdleTicksRequired`, **`nightlyHour`** (effective `0..23` in **R**), **`resolvedTimezone`** (IANA **R**), **`resolvedTimezoneSource`** (`env` / `profile` / `system`), **`readOnly`** (`true` when `DUOLINGO_READ_ONLY=1`). Primary source for UI polling state. |
+| `/api/status`      | `GET`                                               | Auth state, polling on/off, `paused`, `currentlyRunning`, `currentSync`, `expectedDurationMs.{single,cycle}`, last sync result, DB status, `msUntilNextXpCheck`, `msUntilNextNightlySync`, `syncMode` (`"baseline"`/`"fast"`), `fastIdleTicks`, `fastIdleTicksRequired`, **`nightlyHour`** (effective `0..23` in **R**), **`resolvedTimezone`** (IANA **R**), **`resolvedTimezoneSource`** (`settings` / `env` / `profile` / `system`), **`timezoneOverride`** (raw stored `app_settings.timezone_override`, `null` when unset), **`readOnly`** (`true` when `DUOLINGO_READ_ONLY=1`). Primary source for UI polling state. |
 | `/api/polling`     | `POST { action: "pause" | "resume" }`               | Toggle `userPaused`. Returns `{ paused, polling }`. 400 on invalid action. **503 `{ error: "read-only" }`** in read-only mode.                                                                       |
-| `/api/settings`    | `GET` / `POST`                                      | `GET` → `{ nightlyHour, timezoneOverride }` (effective `nightlyHour`, raw stored `timezoneOverride`). `POST { nightlyHour?: 0..23 \| null, timezoneOverride?: string \| null }` updates `app_settings`; a `nightlyHour` change re-arms the nightly `setTimeout` via `rescheduleNightly()`. 400 on validation failure. **503 `{ error: "read-only" }`** in read-only mode. |
+| `/api/settings`    | `GET` / `POST`                                      | `GET` → `{ nightlyHour, timezoneOverride }` (effective `nightlyHour`, raw stored `timezoneOverride`). `POST { nightlyHour?: 0..23 \| null, timezoneOverride?: string \| null }` updates `app_settings`. Side effects: a `nightlyHour` change re-arms the nightly `setTimeout` via `rescheduleNightly()`; a `timezoneOverride` change calls `invalidateResolvedTimezone()` so R re-resolves on the next read. `timezoneOverride` is validated as a real IANA zone (via `Intl.DateTimeFormat`) — bogus strings → 400. 400 on any validation failure. **503 `{ error: "read-only" }`** in read-only mode. |
 | `/api/sync`        | `POST { force?: boolean, cycleAll?: boolean }`      | `force=false` (default): `manualRefresh` (respects cooldown + `isRunning`). `force=true`: direct `fullSync(client, cycleAll)`. **503 `{ error: "read-only" }`** in read-only mode.                  |
 | `/api/sync-course` | `POST { courseId, learningLanguage, fromLanguage }` | `syncCourseDetails` for a single course (may cycle via endpoint ⑥ if not active). **503 `{ error: "read-only" }`** in read-only mode.                                                                |
 | `/api/data`        | `GET`                                               | Read-only queries for the dashboard UI. Supports `DEMO_MODE`.                                                                                                                                       |

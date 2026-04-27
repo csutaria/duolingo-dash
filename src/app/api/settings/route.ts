@@ -2,6 +2,23 @@ import { NextResponse } from "next/server";
 import { getAppSettings, updateAppSettings } from "@/lib/app-settings";
 import { effectiveNightlyHour, rescheduleNightly } from "@/lib/polling";
 import { isReadOnlyMode } from "@/lib/read-only";
+import { invalidateResolvedTimezone } from "@/lib/tz";
+
+/**
+ * Returns true if `zone` is an IANA timezone identifier accepted by the
+ * runtime's ICU. Validates by constructing an `Intl.DateTimeFormat`;
+ * invalid zones throw `RangeError`. This is the single validation gate
+ * for the override — `tz.ts` itself never validates, so we have to
+ * reject bogus values here before they reach the resolver.
+ */
+function isValidIanaZone(zone: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-CA", { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * GET /api/settings — current app settings (effective values).
@@ -9,8 +26,10 @@ import { isReadOnlyMode } from "@/lib/read-only";
  * Returns the *effective* `nightly_hour` (already resolved against the
  * default), not the raw stored value. The UI doesn't need to know
  * whether a value is "explicit" vs "fallthrough"; it just renders the
- * selector at the effective hour. `timezone_override` is the raw
- * stored string (or null) — C4 will surface it.
+ * selector at the effective hour. `timezoneOverride` is the raw stored
+ * string (or null) — distinct from the *resolved* zone reported by
+ * `/api/status` (`resolvedTimezone` + `resolvedTimezoneSource`), which
+ * is what the rest of the chain produced.
  */
 export function GET() {
   return NextResponse.json({
@@ -30,8 +49,17 @@ export function GET() {
  * Side effects on success:
  *  - `nightlyHour` change → `rescheduleNightly()` re-arms the next
  *    setTimeout against the new hour. No process restart needed.
- *  - `timezoneOverride` is stored but the resolver is wired in C4; for
- *    now this just persists the value.
+ *  - `timezoneOverride` change (set or reset) → `invalidateResolvedTimezone()`
+ *    clears the resolver cache so the next `getResolvedTimezone()` call
+ *    sees the new value. Subsequent buckets, scheduling, and `/api/status`
+ *    pick up R immediately.
+ *
+ * Validation:
+ *  - `nightlyHour`: integer 0..23 or null (reset).
+ *  - `timezoneOverride`: a valid IANA zone string (validated via
+ *    `Intl.DateTimeFormat`), or null / empty / whitespace (reset).
+ *    Invalid zone strings get a 400 — the resolver itself never
+ *    validates, so this is the only gate.
  *
  * Returns 503 in read-only mode (consistent with the other write
  * routes), 400 on validation failure, 200 with the new effective values
@@ -70,11 +98,16 @@ export async function POST(request: Request) {
     if (v === null || (typeof v === "string" && v.trim().length === 0)) {
       update.timezone_override = null;
     } else if (typeof v === "string") {
-      // Don't validate IANA zones here — `tz.ts` already validates and
-      // falls back at resolution time. Accepting unknown strings here
-      // keeps the API surface narrow and lets the resolver own the
-      // validity check.
-      update.timezone_override = v.trim();
+      const trimmed = v.trim();
+      if (!isValidIanaZone(trimmed)) {
+        return NextResponse.json(
+          {
+            error: `timezoneOverride must be a valid IANA timezone (got "${trimmed}")`,
+          },
+          { status: 400 },
+        );
+      }
+      update.timezone_override = trimmed;
     } else {
       return NextResponse.json(
         { error: "timezoneOverride must be a string or null" },
@@ -94,6 +127,12 @@ export async function POST(request: Request) {
     updateAppSettings(update);
     if ("nightly_hour" in update) {
       rescheduleNightly();
+    }
+    if ("timezone_override" in update) {
+      // Clear the resolver cache so the next `getResolvedTimezone()`
+      // sees the new override (or, on reset, falls through to env →
+      // profile → host). Cheap; no scheduling work.
+      invalidateResolvedTimezone();
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "settings update failed";

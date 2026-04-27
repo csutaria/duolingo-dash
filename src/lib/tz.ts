@@ -9,24 +9,44 @@
  * traveler) and matches Duolingo's `xp_daily.date` (which is keyed by
  * the user's profile timezone on Duolingo's side).
  *
- * Priority:
- *   1. `DUOLINGO_TZ` env var (manual override).
- *   2. Duolingo profile timezone (`getStoredProfileTimezone` via `setProfileTimezoneLoader`).
- *   3. `Intl.DateTimeFormat().resolvedOptions().timeZone` (Node host).
+ * Priority (highest first):
+ *   1. UI override (`app_settings.timezone_override`) via `setSettingsTimezoneLoader`.
+ *   2. `DUOLINGO_TZ` env var.
+ *   3. Duolingo profile timezone (`getStoredProfileTimezone` via `setProfileTimezoneLoader`).
+ *   4. `Intl.DateTimeFormat().resolvedOptions().timeZone` (Node host).
  *
- * Profile-source resolution is wired by `setProfileTimezoneLoader` to
- * avoid a hard import cycle with `db.ts`. Callers that update the
- * stored profile must call `invalidateResolvedTimezone()` to clear the
- * cache.
+ * The settings and profile loaders are wired via setter functions to
+ * avoid a hard import cycle with `db.ts`. Callers that mutate either
+ * source must call `invalidateResolvedTimezone()` to clear the cache.
+ *
+ * Validation: the resolver itself never throws and never validates
+ * IANA names. The API write boundary (`POST /api/settings`) is
+ * responsible for rejecting bogus zone strings, so a value that lands
+ * in the DB is trusted here. If a hand-edited DB ever stores an
+ * invalid zone, the next `Intl.DateTimeFormat({ timeZone })` call
+ * downstream will throw — but that surface is already caught.
  */
 
-export type TimezoneSource = "env" | "profile" | "system";
+export type TimezoneSource = "settings" | "env" | "profile" | "system";
 
-type ProfileLoader = () => string | null;
+type ZoneLoader = () => string | null;
 
-let profileLoader: ProfileLoader | null = null;
+let settingsLoader: ZoneLoader | null = null;
+let profileLoader: ZoneLoader | null = null;
 let cachedZone: string | null = null;
 let cachedSource: TimezoneSource | null = null;
+
+/**
+ * Register the function that returns the user's UI timezone override
+ * (`app_settings.timezone_override`). Called from `db.ts` at init,
+ * mirroring `setProfileTimezoneLoader`. If unregistered, the resolver
+ * falls through to env → profile → system.
+ */
+export function setSettingsTimezoneLoader(loader: ZoneLoader | null): void {
+  settingsLoader = loader;
+  cachedZone = null;
+  cachedSource = null;
+}
 
 /**
  * Register the function that returns the stored Duolingo profile
@@ -35,7 +55,7 @@ let cachedSource: TimezoneSource | null = null;
  * the resolver falls back through env -> system as if no profile
  * value existed.
  */
-export function setProfileTimezoneLoader(loader: ProfileLoader | null): void {
+export function setProfileTimezoneLoader(loader: ZoneLoader | null): void {
   profileLoader = loader;
   cachedZone = null;
   cachedSource = null;
@@ -43,7 +63,9 @@ export function setProfileTimezoneLoader(loader: ProfileLoader | null): void {
 
 /**
  * Drop the resolver cache. Call after any operation that may have
- * changed the inputs (notably profile upsert during sync).
+ * changed the inputs:
+ *  - profile upsert during sync,
+ *  - UI override write via `POST /api/settings`.
  */
 export function invalidateResolvedTimezone(): void {
   cachedZone = null;
@@ -51,6 +73,19 @@ export function invalidateResolvedTimezone(): void {
 }
 
 function resolve(): { zone: string; source: TimezoneSource } {
+  if (settingsLoader) {
+    try {
+      const settings = settingsLoader();
+      if (settings && settings.trim().length > 0) {
+        return { zone: settings.trim(), source: "settings" };
+      }
+    } catch {
+      // Settings loader failures (DB missing app_settings table on a
+      // read-only follower pointed at an un-migrated DB) fall through
+      // silently. Resolver must never throw.
+    }
+  }
+
   const env = process.env.DUOLINGO_TZ?.trim();
   if (env) return { zone: env, source: "env" };
 
@@ -178,6 +213,7 @@ export function epochMsForLocalTime(
 
 /** @internal tests */
 export function _resetForTests(): void {
+  settingsLoader = null;
   profileLoader = null;
   cachedZone = null;
   cachedSource = null;

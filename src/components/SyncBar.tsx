@@ -63,10 +63,101 @@ const panelHidden = "pointer-events-none invisible opacity-0";
 type SyncMode = "baseline" | "fast";
 
 function sourceLabel(source: string): string {
+  if (source === "settings") return "override";
   if (source === "env") return "DUOLINGO_TZ";
   if (source === "profile") return "Duolingo profile";
   if (source === "system") return "host";
   return source;
+}
+
+/**
+ * Inline editor for `app_settings.timezone_override`. The committed
+ * value lives on the server (`/api/status` → `timezoneOverride`); the
+ * `draft` here is the in-flight edit while the user types. Save fires
+ * the parent's `onCommit(value)`; Reset fires `onCommit(null)`.
+ *
+ * Validation is server-side: `POST /api/settings` rejects non-IANA
+ * names with 400 and the error string surfaces under the row.
+ */
+function TimezoneOverrideRow({
+  current,
+  onCommit,
+  busy,
+  error,
+  disabled,
+}: {
+  current: string | null;
+  onCommit: (value: string | null) => void;
+  busy: boolean;
+  error: string | null;
+  disabled: boolean;
+}) {
+  const [draft, setDraft] = useState<string>(current ?? "");
+
+  // Sync the local draft when the server-confirmed value changes (e.g.
+  // after a successful POST or another instance writing the same DB).
+  // Don't clobber an in-flight edit: only re-sync when the draft
+  // matches the prior server value or is empty.
+  const lastCurrent = useRef<string | null>(current);
+  useEffect(() => {
+    if (draft === (lastCurrent.current ?? "") || draft === "") {
+      setDraft(current ?? "");
+    }
+    lastCurrent.current = current;
+  }, [current, draft]);
+
+  const trimmed = draft.trim();
+  const isUnchanged = trimmed === (current ?? "");
+  const canSave = !busy && !disabled && trimmed.length > 0 && !isUnchanged;
+  const canReset = !busy && !disabled && current != null;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <dt className="shrink-0 text-zinc-500">Override</dt>
+        <dd className="flex min-w-0 items-center gap-1 text-zinc-300">
+          <input
+            type="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && canSave) {
+                e.preventDefault();
+                onCommit(trimmed);
+              }
+            }}
+            disabled={busy || disabled}
+            placeholder="e.g. Asia/Tokyo"
+            spellCheck={false}
+            autoComplete="off"
+            aria-label="Timezone override (IANA zone)"
+            title="Persisted in app_settings.timezone_override. Takes precedence over DUOLINGO_TZ, Duolingo profile, and host."
+            className="min-w-0 flex-1 rounded border border-zinc-700 bg-zinc-900 px-1 py-0.5 text-[11px] text-zinc-200 placeholder:text-zinc-600 disabled:opacity-50"
+          />
+          <button
+            type="button"
+            onClick={() => onCommit(trimmed)}
+            disabled={!canSave}
+            className="rounded border border-zinc-700 bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-200 hover:bg-zinc-700 disabled:opacity-40"
+          >
+            {busy ? "…" : "Save"}
+          </button>
+          <button
+            type="button"
+            onClick={() => onCommit(null)}
+            disabled={!canReset}
+            title="Clear the override and fall back to DUOLINGO_TZ → Duolingo profile → host."
+            className="rounded border border-zinc-700 bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-400 hover:bg-zinc-700 disabled:opacity-40"
+          >
+            Reset
+          </button>
+        </dd>
+      </div>
+      {error != null && (
+        <p className="ml-[5.25rem] text-[10px] text-amber-400">{error}</p>
+      )}
+    </div>
+  );
 }
 
 function SyncStatusPanel({
@@ -87,6 +178,10 @@ function SyncStatusPanel({
   nightlyHour,
   onChangeNightlyHour,
   nightlyHourBusy,
+  timezoneOverride,
+  onCommitTimezoneOverride,
+  timezoneOverrideBusy,
+  timezoneOverrideError,
   pinned,
   visible,
   onTogglePaused,
@@ -111,6 +206,10 @@ function SyncStatusPanel({
   nightlyHour: number;
   onChangeNightlyHour: (h: number) => void;
   nightlyHourBusy: boolean;
+  timezoneOverride: string | null;
+  onCommitTimezoneOverride: (value: string | null) => void;
+  timezoneOverrideBusy: boolean;
+  timezoneOverrideError: string | null;
   pinned: boolean;
   visible: boolean;
   onTogglePaused: () => void;
@@ -242,12 +341,21 @@ function SyncStatusPanel({
             <dt className="shrink-0 text-zinc-500">Timezone</dt>
             <dd
               className="min-w-0 break-all text-zinc-300"
-              title={`Resolved IANA timezone (R) for calendar days, XP daily rows, and the 02:00 nightly sync. Priority: DUOLINGO_TZ env → Duolingo profile (after sync) → host.`}
+              title={`Resolved IANA timezone (R) for calendar days, XP daily rows, and the nightly sync. Priority: override (here) → DUOLINGO_TZ env → Duolingo profile (after sync) → host.`}
             >
               {resolvedTimezone}{" "}
               <span className="text-zinc-500">({sourceLabel(resolvedTimezoneSource)})</span>
             </dd>
           </div>
+        )}
+        {!readOnly && (
+          <TimezoneOverrideRow
+            current={timezoneOverride}
+            onCommit={onCommitTimezoneOverride}
+            busy={timezoneOverrideBusy}
+            error={timezoneOverrideError}
+            disabled={!authenticated}
+          />
         )}
       </dl>
 
@@ -392,6 +500,43 @@ export function SyncBar() {
     [nightlyHour, updateSettings],
   );
 
+  // Timezone override (UI's slot in the resolver chain). Optimistic
+  // pattern with no clearing-effect: the display is computed during
+  // render as "show in-flight value if it disagrees with server,
+  // otherwise show server". Once the next /api/status poll lands and
+  // serverTimezoneOverride catches up to optimisticTimezoneOverride,
+  // the comparison falls through to server naturally — no need to
+  // setState back to undefined (which the linter flags as a
+  // cascading-render anti-pattern).
+  const serverTimezoneOverride =
+    typeof status?.timezoneOverride === "string"
+      ? status.timezoneOverride
+      : null;
+  const [optimisticTimezoneOverride, setOptimisticTimezoneOverride] = useState<
+    string | null | undefined
+  >(undefined);
+  const timezoneOverride =
+    optimisticTimezoneOverride !== undefined
+    && optimisticTimezoneOverride !== serverTimezoneOverride
+      ? optimisticTimezoneOverride
+      : serverTimezoneOverride;
+  const [timezoneOverrideError, setTimezoneOverrideError] = useState<
+    string | null
+  >(null);
+
+  const handleCommitTimezoneOverride = useCallback(
+    async (value: string | null) => {
+      setTimezoneOverrideError(null);
+      setOptimisticTimezoneOverride(value);
+      const res = await updateSettings({ timezoneOverride: value });
+      if ("error" in res && res.error) {
+        setOptimisticTimezoneOverride(undefined);
+        setTimezoneOverrideError(res.error);
+      }
+    },
+    [updateSettings],
+  );
+
   const currentSync = (status?.currentSync as CurrentSync | null) ?? null;
   const expectedDurationMs = status?.expectedDurationMs as
     | { single: number | null; cycle: number | null }
@@ -498,6 +643,10 @@ export function SyncBar() {
           nightlyHour={nightlyHour}
           onChangeNightlyHour={handleChangeNightlyHour}
           nightlyHourBusy={settingsBusy}
+          timezoneOverride={timezoneOverride}
+          onCommitTimezoneOverride={handleCommitTimezoneOverride}
+          timezoneOverrideBusy={settingsBusy}
+          timezoneOverrideError={timezoneOverrideError}
           pinned={pinned}
           visible={panelVisible}
           onTogglePaused={handleTogglePaused}

@@ -1,8 +1,14 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
-import { formatLocalDate, invalidateResolvedTimezone, setProfileTimezoneLoader } from "./tz";
+import {
+  formatLocalDate,
+  invalidateResolvedTimezone,
+  setProfileTimezoneLoader,
+  setSettingsTimezoneLoader,
+} from "./tz";
 import { isReadOnlyMode } from "./read-only";
+import { getAppSettings } from "./app-settings";
 
 const DEMO_MODE = process.env.DEMO_MODE === "true";
 const DB_PATH = path.join(process.cwd(), "data", DEMO_MODE ? "mock.db" : "duolingo.db");
@@ -29,6 +35,13 @@ export function getDb(): Database.Database {
   }
   registerLocalDateFn(db);
   setProfileTimezoneLoader(getStoredProfileTimezone);
+  // The settings loader is wired *after* `getDb()` returns the live
+  // handle, but `getAppSettings()` calls `getDb()` itself — that's a
+  // self-reference that resolves cleanly because the module-level `db`
+  // binding is already populated above. The loader is read lazily at
+  // resolver-resolve time, not now, so calling it here would be
+  // premature anyway.
+  setSettingsTimezoneLoader(() => getAppSettings().timezone_override);
   return db;
 }
 

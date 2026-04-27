@@ -10,6 +10,7 @@ import {
   getResolvedTimezoneSource,
   invalidateResolvedTimezone,
   setProfileTimezoneLoader,
+  setSettingsTimezoneLoader,
   epochMsForLocalTime,
   getLocalParts,
 } from "../tz";
@@ -85,6 +86,53 @@ describe("getResolvedTimezone (priority chain)", () => {
 
     invalidateResolvedTimezone();
     expect(getResolvedTimezone()).toBe("Asia/Tokyo");
+  });
+
+  describe("settings loader (UI override)", () => {
+    it("settings overrides env, profile, and system", () => {
+      setSettingsTimezoneLoader(() => "Asia/Tokyo");
+      setProfileTimezoneLoader(() => "Asia/Kolkata");
+      process.env.DUOLINGO_TZ = "America/Los_Angeles";
+      expect(getResolvedTimezone()).toBe("Asia/Tokyo");
+      expect(getResolvedTimezoneSource()).toBe("settings");
+    });
+
+    it("falls through to env when settings is null", () => {
+      setSettingsTimezoneLoader(() => null);
+      setProfileTimezoneLoader(() => "Asia/Kolkata");
+      process.env.DUOLINGO_TZ = "America/Los_Angeles";
+      expect(getResolvedTimezone()).toBe("America/Los_Angeles");
+      expect(getResolvedTimezoneSource()).toBe("env");
+    });
+
+    it("treats empty/whitespace settings string as absent and falls through", () => {
+      setSettingsTimezoneLoader(() => "   ");
+      setProfileTimezoneLoader(() => "Asia/Kolkata");
+      expect(getResolvedTimezone()).toBe("Asia/Kolkata");
+      expect(getResolvedTimezoneSource()).toBe("profile");
+    });
+
+    it("survives a throwing settings loader by falling through", () => {
+      setSettingsTimezoneLoader(() => {
+        throw new Error("app_settings table missing");
+      });
+      setProfileTimezoneLoader(() => "Asia/Kolkata");
+      expect(getResolvedTimezone()).toBe("Asia/Kolkata");
+      expect(getResolvedTimezoneSource()).toBe("profile");
+    });
+
+    it("invalidating the cache picks up a new settings value", () => {
+      let value: string | null = "Europe/Paris";
+      setSettingsTimezoneLoader(() => value);
+      expect(getResolvedTimezone()).toBe("Europe/Paris");
+      expect(getResolvedTimezoneSource()).toBe("settings");
+      // Mutate the loader's view (simulating a `POST /api/settings`).
+      value = "Asia/Tokyo";
+      // Without invalidation the cache holds:
+      expect(getResolvedTimezone()).toBe("Europe/Paris");
+      invalidateResolvedTimezone();
+      expect(getResolvedTimezone()).toBe("Asia/Tokyo");
+    });
   });
 });
 
