@@ -44,7 +44,7 @@ The dashboard's goal is simple: stay current without interrupting you while you 
 
 - **Every 30 min** — cheap XP check only, no course switching.
 - **If your XP changed** — switches to a 2-min watch. Any new XP in that window drops back to the 30-min baseline (you're still practicing; try again later). 10 minutes of quiet → one full all-course sync.
-- **Every night at 02:00 (server local time)** — one full all-course sync to catch idle-day changes. If you happen to be earning XP around 02:00, the nightly skips its own sync and lets the quiet-watcher run one once you stop.
+- **Every night at a configurable hour (default 02:00, in your resolved timezone)** — one full all-course sync to catch idle-day changes. The hour is selectable from the polling-status panel; the timezone follows the same `R` resolver chain as the rest of the dashboard (`DUOLINGO_TZ` env → Duolingo profile → host). If you happen to be earning XP around that hour, the nightly skips its own sync and lets the quiet-watcher run one once you stop.
 - **Manual Refresh** — resyncs the active course only.
 - **Manual Sync All Languages** — resyncs every course immediately (same disruption caveat below).
 

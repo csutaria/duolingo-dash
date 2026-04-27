@@ -30,6 +30,8 @@ Contributor-facing reference for writing tests and planning new coverage. For th
 | `src/app/api/sync/__tests__/route.test.ts` | POST `/api/sync`: `DUOLINGO_READ_ONLY` (`1`/`true`/`yes`) → 503 `{ error: "read-only" }` and never invokes `ensureClient`/`fullSync`/`manualRefresh`; normal mode dispatches `manualRefresh` vs `fullSync(_, cycleAll)` correctly |
 | `src/app/api/sync-course/__tests__/route.test.ts` | POST `/api/sync-course`: 503 in read-only without touching the writer path; 400 on missing required params |
 | `src/app/api/polling/__tests__/route.test.ts` (read-only block) | POST `/api/polling`: 503 `{ error: "read-only" }` in read-only mode without touching pause/resume/ensureClient |
+| `app-settings.test.ts` | `getAppSettings` / `updateAppSettings`: NULL-default fallthrough for fresh row, missing row, missing table; partial-field updates; `null` resets a field; empty-partial no-op. `effectiveNightlyHour`: NULL → `NIGHTLY_HOUR_DEFAULT` (2); valid 0..23 read-through; out-of-range / non-integer / DB-missing fallback to default |
+| `src/app/api/settings/__tests__/route.test.ts` | GET `/api/settings`: returns effective `nightlyHour` + stored `timezoneOverride`. POST: validates `nightlyHour` is integer 0..23 or null (boundary checks); `null` resets to default; non-integer / out-of-range / non-numeric → 400 with no DB write; `nightlyHour` change calls `rescheduleNightly()`; `timezoneOverride` change does **not** reschedule; empty/whitespace `timezoneOverride` → null reset; empty body → 400; invalid JSON → 400; **read-only mode** → 503 `{ error: "read-only" }` with no DB write or reschedule |
 
 
 Additional invariants exercised across files:

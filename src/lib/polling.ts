@@ -3,6 +3,7 @@ import { quickCheck, fullSync, SyncResult } from "./sync";
 import { getCurrentSync, CurrentSync } from "./sync-state";
 import { getPollingState } from "./polling-state";
 import { epochMsForLocalTime, getLocalParts } from "./tz";
+import { getAppSettings } from "./app-settings";
 
 /**
  * @internal exported for tests
@@ -29,8 +30,32 @@ export const BASELINE_POLL_MS = 30 * 60 * 1000;
 // cycle sync.
 export const FAST_POLL_MS = 2 * 60 * 1000;
 export const FAST_IDLE_TRIGGER_TICKS = 5;
-// Nightly: single sync at 02:00 server local time (quickCheck-first).
-export const NIGHTLY_HOUR_LOCAL = 2;
+// Nightly: single sync at 02:00 in resolved zone (R) by default.
+// `effectiveNightlyHour()` reads `app_settings.nightly_hour` at scheduling
+// time so a UI change re-arms the next setTimeout without a process restart.
+export const NIGHTLY_HOUR_DEFAULT = 2;
+/** @deprecated kept as the documented default; runtime should call `effectiveNightlyHour()`. */
+export const NIGHTLY_HOUR_LOCAL = NIGHTLY_HOUR_DEFAULT;
+
+/**
+ * The hour of day (0..23) when the nightly sync fires, in **R**.
+ * Reads `app_settings.nightly_hour` and falls back to `NIGHTLY_HOUR_DEFAULT`
+ * when unset or out of range. Read at scheduling time, not at module load,
+ * so settings updates take effect on the next `scheduleNightly` call.
+ */
+export function effectiveNightlyHour(): number {
+  let v: number | null;
+  try {
+    v = getAppSettings().nightly_hour;
+  } catch {
+    // If the DB isn't initialized yet (rare, e.g. very early boot) fall
+    // back to the default rather than crashing the timer schedule.
+    return NIGHTLY_HOUR_DEFAULT;
+  }
+  if (v == null) return NIGHTLY_HOUR_DEFAULT;
+  if (!Number.isInteger(v) || v < 0 || v > 23) return NIGHTLY_HOUR_DEFAULT;
+  return v;
+}
 // Manual /api/sync cooldown — unchanged from prior design.
 const MIN_MANUAL_REFRESH_MS = 30 * 1000;
 
@@ -273,7 +298,7 @@ function scheduleNightly(client: DuolingoClient): void {
     clearTimeout(state.nightlyTimer);
     state.nightlyTimer = null;
   }
-  const delay = msUntilNextLocalTime(NIGHTLY_HOUR_LOCAL);
+  const delay = msUntilNextLocalTime(effectiveNightlyHour());
   state.nightlyTimer = setTimeout(() => {
     state.nightlyTimer = null;
     void nightlyTick(client);
@@ -384,7 +409,7 @@ export function getSyncTimingStatus(): SyncTimingStatus {
 
   const msUntilNextNightlySync =
     state.nightlyTimer !== null
-      ? msUntilNextLocalTime(NIGHTLY_HOUR_LOCAL, now)
+      ? msUntilNextLocalTime(effectiveNightlyHour(), now)
       : null;
 
   return {
@@ -394,6 +419,20 @@ export function getSyncTimingStatus(): SyncTimingStatus {
     fastIdleTicks: state.fastConsecutiveIdleTicks,
     fastIdleTicksRequired: FAST_IDLE_TRIGGER_TICKS,
   };
+}
+
+/**
+ * Re-arm the nightly setTimeout against the current `effectiveNightlyHour()`.
+ * Called by `/api/settings` after a successful nightly_hour update so the
+ * change takes effect on the next tick without a process restart. No-op if
+ * polling isn't running (the writer is paused / unauthenticated). Caller
+ * is responsible for passing the live client; we re-use the one already
+ * stashed in polling state.
+ */
+export function rescheduleNightly(): void {
+  const state = getPollingState();
+  if (!state.client) return;
+  scheduleNightly(state.client);
 }
 
 /**

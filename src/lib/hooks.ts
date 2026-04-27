@@ -91,6 +91,34 @@ export function usePollingControl() {
   return { setPaused, pending };
 }
 
+export function useUpdateSettings() {
+  const [pending, setPending] = useState(false);
+
+  const update = useCallback(
+    async (
+      patch: { nightlyHour?: number | null; timezoneOverride?: string | null },
+    ): Promise<{ nightlyHour?: number; timezoneOverride?: string | null; error?: string }> => {
+      setPending(true);
+      try {
+        const res = await fetch("/api/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        });
+        const data = await res.json();
+        return data;
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : "Settings update failed" };
+      } finally {
+        setPending(false);
+      }
+    },
+    [],
+  );
+
+  return { update, pending };
+}
+
 export function useStatus() {
   const [status, setStatus] = useState<Record<string, unknown> | null>(null);
 

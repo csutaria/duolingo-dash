@@ -5,6 +5,7 @@ import {
   isPolling,
   isCurrentlyRunning,
   getSyncTimingStatus,
+  effectiveNightlyHour,
 } from "@/lib/polling";
 import { getSyncStatus } from "@/lib/queries";
 import { getCurrentSync } from "@/lib/sync-state";
@@ -47,6 +48,7 @@ export async function GET() {
       syncMode: "baseline" as const,
       fastIdleTicks: 0,
       fastIdleTicksRequired: 5,
+      nightlyHour: effectiveNightlyHour(),
     });
   }
 
@@ -79,5 +81,6 @@ export async function GET() {
     syncMode: timing.syncMode,
     fastIdleTicks: timing.fastIdleTicks,
     fastIdleTicksRequired: timing.fastIdleTicksRequired,
+    nightlyHour: effectiveNightlyHour(),
   });
 }

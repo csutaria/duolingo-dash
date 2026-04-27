@@ -22,7 +22,7 @@ Browser (Next.js client) ─► Next.js API routes (server) ─► duolingo.com
 3. **Quiet-detector (fast mode)**: when baseline sees XP changed vs last full sync, start polling `totalXp` every 2 min.
    - Any observed XP change → immediately return to baseline. Do **not** extend fast mode.
    - 5 consecutive unchanged fast ticks (10 min of quiet) → fire `fullSync(cycleAll=true)` → return to baseline.
-4. **Nightly once at 02:00 in the resolved timezone (R).** `quickCheck` first:
+4. **Nightly once at the configured hour in the resolved timezone (R).** Default `02:00`; configurable via the SyncBar selector (persisted to `app_settings.nightly_hour`). `quickCheck` first:
    - If XP changed vs last full sync → enter fast mode (if not already). Do not force a sync.
    - If XP unchanged → run `fullSync(cycleAll=true)`. Covers idle days.
 5. **Pause** stops all three: baseline, fast, nightly. Pause is in-memory only — process restart always resumes polling.
@@ -82,8 +82,41 @@ Deployment checklist (single-user/self-host):
 
 1. Pick the user's wall-clock zone (for example, `America/Los_Angeles`).
 2. Set `DUOLINGO_TZ` on the host to that IANA name.
-3. Verify at runtime that `msUntilNextNightlySync` (from `/api/status`) counts down to the next 02:00 in that zone.
+3. Verify at runtime that `msUntilNextNightlySync` (from `/api/status`) counts down to the next nightly hour in that zone.
 4. Keep host OS timezone independent (UTC is fine). Scheduling uses **R**, not host-local midnight math.
+
+## App settings (`app_settings` table)
+
+Single-row (`id = 1`) SQLite table for user-editable preferences. Helpers in `src/lib/app-settings.ts` (`getAppSettings`, `updateAppSettings`); HTTP surface in `/api/settings`.
+
+| Column              | Type      | Default fallthrough                                | Consumer                                              |
+| ------------------- | --------- | -------------------------------------------------- | ----------------------------------------------------- |
+| `nightly_hour`      | INTEGER 0..23 | `null` → 2 (legacy `NIGHTLY_HOUR_DEFAULT`)         | `effectiveNightlyHour()` in `polling.ts`              |
+| `timezone_override` | TEXT (IANA)   | `null` → resolver chain (env → profile → host)     | (Reserved for C4; resolver wiring lands with C4)      |
+| `updated_at`        | TEXT      | `datetime('now')`                                  | Audit only                                            |
+
+Notes:
+
+- `NULL` always means **fall through to default**, not "value 0". Storing 0 in `nightly_hour` means "midnight (R)".
+- `getAppSettings()` is read-side defensive: if the table or row is missing (e.g. read-only instance pointed at an un-migrated DB) it returns `{ nightly_hour: null, timezone_override: null }` rather than throwing.
+- The helpers live in their own module so consumers can `jest.doMock("./db", { getDb: () => testDb })` and have the helpers reach the mocked handle. Functions defined inside `db.ts` itself bypass module-level mocks because their internal `getDb()` reference resolves to the real binding.
+- Updating `nightly_hour` via `POST /api/settings` calls `rescheduleNightly()` so the next `setTimeout` is re-armed against the new hour without a process restart.
+
+## Nightly sync (selectable hour)
+
+`scheduleNightly(client)` reads `effectiveNightlyHour()` at scheduling time (not module load). The chain is:
+
+```
+app_settings.nightly_hour (UI)  ─┐
+                                 ├─► effectiveNightlyHour()  ──►  msUntilNextLocalTime(h, R)
+NIGHTLY_HOUR_DEFAULT (= 2)  ─────┘
+```
+
+- `effectiveNightlyHour()` validates the stored value is an integer in `0..23`; out-of-range / non-integer / DB-missing → `NIGHTLY_HOUR_DEFAULT` (2).
+- The hour is interpreted in **R** (resolved zone), not S — see `msUntilNextLocalTime` and the Timezone model section above. Changing the hour does **not** change the zone.
+- `POST /api/settings { "nightlyHour": 7 }` triggers `updateAppSettings({ nightly_hour: 7 })` then `rescheduleNightly()`. The latter no-ops if there is no live client (e.g. paused before resume).
+- `GET /api/status` reports the effective hour as `nightlyHour` (always present in non-DEMO responses, including read-only). The UI surfaces it as a `<select>` next to "Next nightly sync" in the SyncBar status panel.
+
 
 ## Read-only mode (`DUOLINGO_READ_ONLY=1`)
 
@@ -99,7 +132,7 @@ Activated by env: `DUOLINGO_READ_ONLY=1` (also `true`/`yes`, case-insensitive). 
 | `POST /api/sync` | Returns `503 { "error": "read-only" }`. |
 | `POST /api/sync-course` | Returns `503 { "error": "read-only" }`. |
 | `POST /api/polling` | Returns `503 { "error": "read-only" }`. |
-| `GET /api/status` | Returns `{ readOnly: true, authenticated: false, polling: false, dbStatus, resolvedTimezone, resolvedTimezoneSource }` (other timer fields are nulled — they don't apply). |
+| `GET /api/status` | Returns `{ readOnly: true, authenticated: false, polling: false, dbStatus, resolvedTimezone, resolvedTimezoneSource, nightlyHour }` (other timer fields are nulled — they don't apply). `nightlyHour` is exposed so the read-only UI can render the same selector grayed-out. |
 | `SyncBar` UI | Renders a blue **"Read-only"** pill in place of Refresh / Sync All. The status panel shows "Display-only instance. Writes are disabled." instead of the pause toggle. The `Last sync` row + Timezone row still render from `dbStatus`. |
 
 Caveats and follow-ups (these are why this is a "display" mode, not "follower" mode):
@@ -119,7 +152,7 @@ See `README.md` § "Running a display-only second instance" for the user-facing 
 | --------------- | -------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `baselineTimer` | `setInterval`        | 30 min                              | `baselineTick`: `quickCheck`. If XP changed vs last sync and in baseline mode → enter fast mode. Never fires `fullSync`. |
 | `fastTimer`     | `setInterval`        | 2 min (only while `mode === "fast"`) | `fastTick`: `getTotalXp`. Any change → revert to baseline. 5 unchanged ticks → `fullSync(cycleAll=true)` → revert.       |
-| `nightlyTimer`  | chained `setTimeout` | next 02:00 in R                     | `nightlyTick`: `quickCheck`. Changed → enter fast mode (no sync). Unchanged → `fullSync(cycleAll=true)`. Re-arms.        |
+| `nightlyTimer`  | chained `setTimeout` | next `effectiveNightlyHour():00` in R | `nightlyTick`: `quickCheck`. Changed → enter fast mode (no sync). Unchanged → `fullSync(cycleAll=true)`. Re-arms with the current setting (UI changes take effect on the next arming or via `rescheduleNightly()`).        |
 
 
 State transitions (pure, unit-tested as `advanceSyncState`):
@@ -193,8 +226,9 @@ Progress is derived client-side as `min(1, elapsed / expectedDurationMs[type])` 
 
 | Route              | Method                                              | Purpose                                                                                                                                                                                             |
 | ------------------ | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/api/status`      | `GET`                                               | Auth state, polling on/off, `paused`, `currentlyRunning`, `currentSync`, `expectedDurationMs.{single,cycle}`, last sync result, DB status, `msUntilNextXpCheck`, `msUntilNextNightlySync`, `syncMode` (`"baseline"`/`"fast"`), `fastIdleTicks`, `fastIdleTicksRequired`, **`resolvedTimezone`** (IANA **R**), **`resolvedTimezoneSource`** (`env` / `profile` / `system`), **`readOnly`** (`true` when `DUOLINGO_READ_ONLY=1`). Primary source for UI polling state. |
+| `/api/status`      | `GET`                                               | Auth state, polling on/off, `paused`, `currentlyRunning`, `currentSync`, `expectedDurationMs.{single,cycle}`, last sync result, DB status, `msUntilNextXpCheck`, `msUntilNextNightlySync`, `syncMode` (`"baseline"`/`"fast"`), `fastIdleTicks`, `fastIdleTicksRequired`, **`nightlyHour`** (effective `0..23` in **R**), **`resolvedTimezone`** (IANA **R**), **`resolvedTimezoneSource`** (`env` / `profile` / `system`), **`readOnly`** (`true` when `DUOLINGO_READ_ONLY=1`). Primary source for UI polling state. |
 | `/api/polling`     | `POST { action: "pause" | "resume" }`               | Toggle `userPaused`. Returns `{ paused, polling }`. 400 on invalid action. **503 `{ error: "read-only" }`** in read-only mode.                                                                       |
+| `/api/settings`    | `GET` / `POST`                                      | `GET` → `{ nightlyHour, timezoneOverride }` (effective `nightlyHour`, raw stored `timezoneOverride`). `POST { nightlyHour?: 0..23 \| null, timezoneOverride?: string \| null }` updates `app_settings`; a `nightlyHour` change re-arms the nightly `setTimeout` via `rescheduleNightly()`. 400 on validation failure. **503 `{ error: "read-only" }`** in read-only mode. |
 | `/api/sync`        | `POST { force?: boolean, cycleAll?: boolean }`      | `force=false` (default): `manualRefresh` (respects cooldown + `isRunning`). `force=true`: direct `fullSync(client, cycleAll)`. **503 `{ error: "read-only" }`** in read-only mode.                  |
 | `/api/sync-course` | `POST { courseId, learningLanguage, fromLanguage }` | `syncCourseDetails` for a single course (may cycle via endpoint ⑥ if not active). **503 `{ error: "read-only" }`** in read-only mode.                                                                |
 | `/api/data`        | `GET`                                               | Read-only queries for the dashboard UI. Supports `DEMO_MODE`.                                                                                                                                       |

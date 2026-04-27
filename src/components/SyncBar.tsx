@@ -1,7 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useSync, useStatus, usePollingControl } from "@/lib/hooks";
+import {
+  useSync,
+  useStatus,
+  usePollingControl,
+  useUpdateSettings,
+} from "@/lib/hooks";
 import { parseUtcDate } from "@/lib/utils";
 
 function ceilMin(ms: number): number {
@@ -79,6 +84,9 @@ function SyncStatusPanel({
   syncMode,
   fastIdleTicks,
   fastIdleTicksRequired,
+  nightlyHour,
+  onChangeNightlyHour,
+  nightlyHourBusy,
   pinned,
   visible,
   onTogglePaused,
@@ -100,6 +108,9 @@ function SyncStatusPanel({
   syncMode: SyncMode;
   fastIdleTicks: number;
   fastIdleTicksRequired: number;
+  nightlyHour: number;
+  onChangeNightlyHour: (h: number) => void;
+  nightlyHourBusy: boolean;
   pinned: boolean;
   visible: boolean;
   onTogglePaused: () => void;
@@ -204,6 +215,26 @@ function SyncStatusPanel({
                       : "— (scheduling)"}
               </dd>
             </div>
+            <div className="flex items-center gap-2">
+              <dt className="shrink-0 text-zinc-500">Nightly at</dt>
+              <dd className="flex items-center gap-1 text-zinc-300">
+                <select
+                  value={nightlyHour}
+                  onChange={(e) => onChangeNightlyHour(Number(e.target.value))}
+                  disabled={nightlyHourBusy || !authenticated}
+                  aria-label="Nightly sync hour"
+                  title="Hour of day (in resolved timezone) when the nightly cycle-all sync fires."
+                  className="rounded border border-zinc-700 bg-zinc-900 px-1 py-0.5 text-[11px] tabular-nums text-zinc-200 disabled:opacity-50"
+                >
+                  {Array.from({ length: 24 }, (_, h) => (
+                    <option key={h} value={h}>
+                      {String(h).padStart(2, "0")}:00
+                    </option>
+                  ))}
+                </select>
+                <span className="text-zinc-500">in {resolvedTimezone ?? "R"}</span>
+              </dd>
+            </div>
           </>
         )}
         {resolvedTimezone != null && resolvedTimezoneSource != null && (
@@ -263,6 +294,7 @@ export function SyncBar() {
   const { sync, syncing } = useSync();
   const status = useStatus();
   const { setPaused, pending: pauseBusy } = usePollingControl();
+  const { update: updateSettings, pending: settingsBusy } = useUpdateSettings();
 
   const [pinned, setPinned] = useState(false);
   const [hover, setHover] = useState(false);
@@ -338,6 +370,27 @@ export function SyncBar() {
   const syncMode = ((status?.syncMode as SyncMode | undefined) ?? "baseline") as SyncMode;
   const fastIdleTicks = (status?.fastIdleTicks as number | undefined) ?? 0;
   const fastIdleTicksRequired = (status?.fastIdleTicksRequired as number | undefined) ?? 5;
+  const serverNightlyHour = (status?.nightlyHour as number | undefined) ?? 2;
+  // Optimistically reflect the user's selection so the dropdown doesn't
+  // visually snap back during the ~1s round-trip; clears when the server
+  // confirms (poll loop refreshes status every 5s, plus the post-update
+  // refetch below).
+  const [optimisticNightlyHour, setOptimisticNightlyHour] = useState<number | null>(null);
+  useEffect(() => {
+    if (optimisticNightlyHour == null) return;
+    if (serverNightlyHour === optimisticNightlyHour) setOptimisticNightlyHour(null);
+  }, [serverNightlyHour, optimisticNightlyHour]);
+  const nightlyHour = optimisticNightlyHour ?? serverNightlyHour;
+
+  const handleChangeNightlyHour = useCallback(
+    async (h: number) => {
+      if (h === nightlyHour) return;
+      setOptimisticNightlyHour(h);
+      const res = await updateSettings({ nightlyHour: h });
+      if ("error" in res && res.error) setOptimisticNightlyHour(null);
+    },
+    [nightlyHour, updateSettings],
+  );
 
   const currentSync = (status?.currentSync as CurrentSync | null) ?? null;
   const expectedDurationMs = status?.expectedDurationMs as
@@ -442,6 +495,9 @@ export function SyncBar() {
           syncMode={syncMode}
           fastIdleTicks={fastIdleTicks}
           fastIdleTicksRequired={fastIdleTicksRequired}
+          nightlyHour={nightlyHour}
+          onChangeNightlyHour={handleChangeNightlyHour}
+          nightlyHourBusy={settingsBusy}
           pinned={pinned}
           visible={panelVisible}
           onTogglePaused={handleTogglePaused}

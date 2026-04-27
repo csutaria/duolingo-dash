@@ -181,6 +181,21 @@ function initSchema(db: Database.Database): void {
     );
   `);
 
+  // App-level prefs. Single-row, `id = 1`. NULL columns mean "fall through
+  // to defaults" — the resolver chains live in the consumer (e.g.
+  // `effectiveNightlyHour()` in `polling.ts`, `setSettingsTimezoneLoader`
+  // in `tz.ts`). `timezone_override` is reserved for C4 and ignored until
+  // the resolver is wired up.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      nightly_hour INTEGER,
+      timezone_override TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    INSERT OR IGNORE INTO app_settings (id) VALUES (1);
+  `);
+
   migrateSyncLog(db);
   migrateStreakTracking(db);
   migrateUserProfileTimezone(db);
