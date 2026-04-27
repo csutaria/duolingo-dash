@@ -88,6 +88,26 @@ Deployment checklist (single-user/self-host):
 3. Verify at runtime that `msUntilNextNightlySync` (from `/api/status`) counts down to the next nightly hour in that zone, and that `resolvedTimezoneSource` is `"settings"` or `"env"` (not `"system"`).
 4. Keep host OS timezone independent (UTC is fine). Scheduling uses **R**, not host-local midnight math.
 
+### DST policy
+
+We do not pin the wall-clock interpretation of `R`; we re-derive it every time we cross a function boundary. That means daylight-saving transitions are absorbed by the standard `Intl.DateTimeFormat` pipeline rather than handled with explicit branches. Concrete behavior:
+
+| Transition | What happens to the nightly tick (assume `nightly_hour = 2`) |
+|---|---|
+| **Spring forward** (`02:00 → 03:00`, the missing hour) | `epochMsForLocalTime(y, m, d, 2, R)` does a single guess-and-correct against the offset at the guessed instant; the nearest representable wall clock is `03:00`, so the nightly fires at `03:00` local that day. One-day shift, self-correcting. The round-trip test in `tz.test.ts` (`getLocalParts / epochMsForLocalTime round-trip`) is `parts.hour ∈ [h, h+1]` precisely so the spring-forward instant doesn't break the assertion. |
+| **Fall back** (`02:00` happens twice) | Guess-and-correct picks the *first* occurrence (the pre-shift offset). The post-shift `02:00` is skipped. Acceptable: the missed second instance is just a normal idle hour the quiet-detector covers. |
+| **Calendar-day buckets across DST** | `LOCAL_DATE(utc)` and `formatLocalDate` always go through `Intl.DateTimeFormat` with `timeZone: R`, which applies the correct offset for that instant. No off-by-one on either side of the transition. |
+
+What this means for the resolver cache:
+
+- `invalidateResolvedTimezone()` is fired only on writes to `app_settings.timezone_override` or to the stored profile timezone, **not** on DST. Caching the IANA *zone string* (not an offset) means `Intl` recomputes the offset every time we format. DST transitions inside a fixed zone don't require cache invalidation.
+- A live process spans DST transitions without action. A long-running `setTimeout` for the nightly is also fine: the `delay` is computed in real-time milliseconds against the post-DST instant, so the OS scheduler fires it at the right wall-clock moment regardless of when the timer was armed.
+
+What we do **not** support:
+
+- Switching `R` to a fixed-offset zone (e.g. `Etc/GMT+8`) and expecting it to track local DST. By definition fixed-offset zones don't observe DST; if the user's locale does, they should use the IANA region name (`America/Los_Angeles`, not `Etc/GMT+8`).
+- Mid-tick DST recomputation. If the spring-forward instant lands inside a `setTimeout` window, the timer fires at the originally-computed epoch ms (which already accounts for the new offset). No further adjustment is performed.
+
 ## App settings (`app_settings` table)
 
 Single-row (`id = 1`) SQLite table for user-editable preferences. Helpers in `src/lib/app-settings.ts` (`getAppSettings`, `updateAppSettings`); HTTP surface in `/api/settings`.
@@ -141,7 +161,7 @@ Activated by env: `DUOLINGO_READ_ONLY=1` (also `true`/`yes`, case-insensitive). 
 
 Caveats and follow-ups (these are why this is a "display" mode, not "follower" mode):
 
-- The resolver cache in `src/lib/tz.ts` is per-process. If the writer learns a new Duolingo profile timezone, or if the user changes the `app_settings.timezone_override` from another instance, the read-only process won't see it until restart — `invalidateResolvedTimezone()` is only fired in the process that handled the write. Acceptable for now; tracked in `docs/multi-server.md` (planned C5).
+- The resolver cache in `src/lib/tz.ts` is per-process. If the writer learns a new Duolingo profile timezone, or if the user changes the `app_settings.timezone_override` from another instance, the read-only process won't see it until restart — `invalidateResolvedTimezone()` is only fired in the process that handled the write. Acceptable for the C2 display-only model; the broader inventory of per-process state and what would have to change for true multi-writer is in [`docs/multi-server.md`](./multi-server.md).
 - `dbStatus` reflects the writer's last sync — the read-only process never updates `sync_log`. The UI should not interpret "no recent sync" as a problem on a read-only instance.
 - The DB file must be reachable by both processes (same host, shared filesystem, or copy). SQLite WAL is concurrent-read-safe with a single writer, which is the configuration we expect here.
 
