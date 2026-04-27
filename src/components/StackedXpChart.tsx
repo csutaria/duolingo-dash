@@ -126,8 +126,27 @@ export function StackedXpChart({
   // baseline slab sits at the floor and the window's deltas (plus any
   // _pretrack) fill the visible range. Falls back to a tight zoom on
   // _total when _prior is absent (e.g. no profile data).
+  //
+  // The buffer below `priorValue` scales with the visible delta range
+  // (`max(_total) - prior`) at 5%, with a 1-unit minimum so a literal
+  // 0-XP window still leaves a visible slab. A scale-relative buffer
+  // (vs. the previous `prior * 0.99` which sized off the absolute prior
+  // value) keeps the per-window deltas visually dominant: a 25 XP day
+  // no longer sits inside a ~1.5k cushion that dwarfs the signal.
+  const dataMaxNum = (() => {
+    let m = -Infinity;
+    for (const d of data) {
+      const t = Number(d._total ?? 0);
+      if (t > m) m = t;
+    }
+    return isFinite(m) ? m : priorValue;
+  })();
+  const priorBuffer = Math.max(
+    1,
+    Math.ceil(Math.max(0, dataMaxNum - priorValue) * 0.05),
+  );
   const yDomain: [number | string, number | string] = hasPrior
-    ? [Math.floor(priorValue * 0.99), "dataMax"]
+    ? [Math.max(0, priorValue - priorBuffer), "dataMax"]
     : domainStart != null
       ? [Math.floor(yMin * 0.98), "dataMax"]
       : [0, "dataMax"];
@@ -150,14 +169,7 @@ export function StackedXpChart({
   //   step ≥   10 → "X.YYk"   (rare; very narrow zoom)
   //   step ≥    1 → "X.YYYk"  (rarer still)
   //   else        → raw integer with thousands separator
-  const yMaxNum = (() => {
-    let m = -Infinity;
-    for (const d of data) {
-      const t = Number(d._total ?? 0);
-      if (t > m) m = t;
-    }
-    return isFinite(m) ? m : 0;
-  })();
+  const yMaxNum = dataMaxNum;
   const yTicks = (() => {
     if (yMaxNum <= yMinNum) return [yMinNum];
     const range = yMaxNum - yMinNum;
