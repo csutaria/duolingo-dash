@@ -33,6 +33,7 @@ const USER_FIELDS = [
   "learningLanguage",
   "fromLanguage",
   "motivation",
+  "timezone",
   "courses{id,title,learningLanguage,fromLanguage,xp,crowns,healthEnabled,preload}",
   "_achievements",
   "achievements",

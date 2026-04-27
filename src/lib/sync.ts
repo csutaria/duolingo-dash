@@ -113,6 +113,10 @@ export async function syncIfChanged(
 }
 
 function saveProfile(user: DuolingoUser): void {
+  const tz =
+    typeof user.timezone === "string" && user.timezone.trim().length > 0
+      ? user.timezone.trim()
+      : null;
   upsertProfile({
     user_id: user.id,
     username: user.username,
@@ -133,6 +137,7 @@ function saveProfile(user: DuolingoUser): void {
     learning_language: user.learningLanguage,
     from_language: user.fromLanguage,
     motivation: user.motivation,
+    timezone: tz,
   });
 }
 

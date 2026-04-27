@@ -9,12 +9,17 @@ import {
 import { getSyncStatus } from "@/lib/queries";
 import { getCurrentSync } from "@/lib/sync-state";
 import { getMedianDurationMs } from "@/lib/db";
+import { getResolvedTimezone, getResolvedTimezoneSource } from "@/lib/tz";
 
 const DEMO_MODE = process.env.DEMO_MODE === "true";
 
 export async function GET() {
   if (DEMO_MODE) {
-    return NextResponse.json({ demoMode: true });
+    return NextResponse.json({
+      demoMode: true,
+      resolvedTimezone: getResolvedTimezone(),
+      resolvedTimezoneSource: getResolvedTimezoneSource(),
+    });
   }
 
   const client = getClientOrNull();
@@ -31,6 +36,8 @@ export async function GET() {
 
   return NextResponse.json({
     authenticated: client !== null,
+    resolvedTimezone: getResolvedTimezone(),
+    resolvedTimezoneSource: getResolvedTimezoneSource(),
     polling: isPolling(),
     paused: isUserPaused(),
     currentlyRunning: isCurrentlyRunning(),

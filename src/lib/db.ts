@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
-import { formatLocalDate, setProfileTimezoneLoader } from "./tz";
+import { formatLocalDate, invalidateResolvedTimezone, setProfileTimezoneLoader } from "./tz";
 
 const DEMO_MODE = process.env.DEMO_MODE === "true";
 const DB_PATH = path.join(process.cwd(), "data", DEMO_MODE ? "mock.db" : "duolingo.db");
@@ -16,8 +16,6 @@ export function getDb(): Database.Database {
   db.pragma("foreign_keys = ON");
   initSchema(db);
   registerLocalDateFn(db);
-  // Phase 2 wires `getStoredProfileTimezone` here. Until that lands,
-  // the resolver still works correctly via env -> system fallback.
   setProfileTimezoneLoader(getStoredProfileTimezone);
   return db;
 }
@@ -173,6 +171,7 @@ function initSchema(db: Database.Database): void {
 
   migrateSyncLog(db);
   migrateStreakTracking(db);
+  migrateUserProfileTimezone(db);
 }
 
 /** @internal exported for tests */
@@ -192,6 +191,14 @@ export function migrateSyncLog(db: Database.Database): void {
   }
   if (!has("cycle_all")) {
     db.exec("ALTER TABLE sync_log ADD COLUMN cycle_all INTEGER NOT NULL DEFAULT 0");
+  }
+}
+
+/** @internal exported for tests */
+export function migrateUserProfileTimezone(db: Database.Database): void {
+  const cols = db.prepare("PRAGMA table_info(user_profile)").all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === "timezone")) {
+    db.exec("ALTER TABLE user_profile ADD COLUMN timezone TEXT");
   }
 }
 
@@ -329,10 +336,8 @@ export function getMedianDurationMs(cycleAll: boolean, limit = 3): number | null
 }
 
 /**
- * Read the Duolingo profile timezone, if persisted. Returns null in
- * Phase 1 (column doesn't exist yet) — Phase 2 adds the column and
- * `upsertProfile` writes it. The resolver in `tz.ts` falls back
- * cleanly through env -> system when this returns null.
+ * Read the Duolingo profile timezone persisted at last sync.
+ * Returns null when unset or before first sync with timezone data.
  */
 export function getStoredProfileTimezone(): string | null {
   const db = getDb();
@@ -346,12 +351,15 @@ export function getStoredProfileTimezone(): string | null {
 
 export function upsertProfile(data: Record<string, unknown>): void {
   const db = getDb();
+  const tzRaw = data.timezone;
+  const timezone =
+    typeof tzRaw === "string" && tzRaw.trim().length > 0 ? tzRaw.trim() : null;
   db.prepare(`
     INSERT INTO user_profile (id, user_id, username, name, picture, bio, streak,
       current_streak_start, current_streak_length, previous_streak_length,
       total_xp, xp_goal, gems, lingots, has_plus, creation_date,
-      current_course_id, learning_language, from_language, motivation, updated_at)
-    VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      current_course_id, learning_language, from_language, motivation, timezone, updated_at)
+    VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     ON CONFLICT(id) DO UPDATE SET
       username=excluded.username, name=excluded.name, picture=excluded.picture,
       bio=excluded.bio, streak=excluded.streak,
@@ -362,14 +370,16 @@ export function upsertProfile(data: Record<string, unknown>): void {
       gems=excluded.gems, lingots=excluded.lingots, has_plus=excluded.has_plus,
       creation_date=excluded.creation_date, current_course_id=excluded.current_course_id,
       learning_language=excluded.learning_language, from_language=excluded.from_language,
-      motivation=excluded.motivation, updated_at=datetime('now')
+      motivation=excluded.motivation, timezone=excluded.timezone, updated_at=datetime('now')
   `).run(
     data.user_id, data.username, data.name, data.picture, data.bio, data.streak,
     data.current_streak_start, data.current_streak_length, data.previous_streak_length,
     data.total_xp, data.xp_goal, data.gems, data.lingots, data.has_plus,
     data.creation_date, data.current_course_id, data.learning_language,
     data.from_language, data.motivation,
+    timezone,
   );
+  invalidateResolvedTimezone();
 }
 
 export function insertCourseSnapshot(

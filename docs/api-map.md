@@ -26,7 +26,7 @@ JWT (env var)
 **① `GET /2017-06-30/users/{userId}?fields=...`** — main user fetch  
 *Input:* `userId` from JWT  
 *Scope:* **account-wide** — returns all courses at once  
-*Returns:* profile, streak, totalXp, xpGoal, gems, lingots, hasPlus, ALL courses (id, title, learningLanguage, fromLanguage, xp, crowns), currentCourseId, `_achievements`  
+*Returns:* profile, streak, totalXp, xpGoal, gems, lingots, hasPlus, `timezone` (IANA zone when present), ALL courses (id, title, learningLanguage, fromLanguage, xp, crowns), currentCourseId, `_achievements` — we request `timezone` in `USER_FIELDS` and persist it to `user_profile.timezone` for **R** (after `DUOLINGO_TZ`, before host `Intl`).  
 *Limitation:* `crowns` always 0/stale. `_achievements` may be empty.
 
 **② `GET /2017-06-30/users/{userId}?fields=totalXp*`* — quick XP poll  
@@ -40,7 +40,7 @@ JWT (env var)
 *Returns:* per-day: `gainedXp`, `frozen`, `streakExtended`, `dailyGoalXp`, `numSessions`, `totalSessionTime`  
 *Limitation:* no per-language breakdown
 
-Deployment note: on UTC hosts, if `DUOLINGO_TZ` is unset and no profile timezone is persisted, `R` may resolve to `UTC`; then endpoint ③ buckets by UTC calendar days. Set `DUOLINGO_TZ` explicitly for user-local day semantics.
+Deployment note: on UTC hosts, if `DUOLINGO_TZ` is unset and Duolingo has not returned `timezone` yet (so `user_profile.timezone` is empty), `R` may fall through to host `Intl` (often `UTC`); then endpoint ③ buckets by UTC calendar days. Set `DUOLINGO_TZ` explicitly if you need user-local semantics before the first profile sync.
 
 **④ `GET /vocabulary/overview*`* — vocab for active course  
 *Input:* **none in the URL** — uses active course implicitly from account state  

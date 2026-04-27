@@ -61,7 +61,7 @@ The app uses two timezone concepts:
 `R` priority:
 
 1. `DUOLINGO_TZ` env var (explicit override)
-2. Duolingo profile timezone (when persisted; see roadmap below)
+2. Duolingo profile timezone (`user_profile.timezone`, filled from Duolingo user `timezone` on sync)
 3. Host/system timezone (`Intl.DateTimeFormat().resolvedOptions().timeZone`)
 
 Rules:
@@ -168,7 +168,7 @@ Progress is derived client-side as `min(1, elapsed / expectedDurationMs[type])` 
 
 | Route              | Method                                              | Purpose                                                                                                                                                                                             |
 | ------------------ | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/api/status`      | `GET`                                               | Auth state, polling on/off, `paused`, `currentlyRunning`, `currentSync`, `expectedDurationMs.{single,cycle}`, last sync result, DB status, `msUntilNextXpCheck`, `msUntilNextNightlySync`, `syncMode` (`"baseline"`/`"fast"`), `fastIdleTicks`, `fastIdleTicksRequired`. Primary source for UI polling state. |
+| `/api/status`      | `GET`                                               | Auth state, polling on/off, `paused`, `currentlyRunning`, `currentSync`, `expectedDurationMs.{single,cycle}`, last sync result, DB status, `msUntilNextXpCheck`, `msUntilNextNightlySync`, `syncMode` (`"baseline"`/`"fast"`), `fastIdleTicks`, `fastIdleTicksRequired`, **`resolvedTimezone`** (IANA **R**), **`resolvedTimezoneSource`** (`env` / `profile` / `system`). Primary source for UI polling state. |
 | `/api/polling`     | `POST { action: "pause" | "resume" }`               | Toggle `userPaused`. Returns `{ paused, polling }`. 400 on invalid action.                                                                                                                          |
 | `/api/sync`        | `POST { force?: boolean, cycleAll?: boolean }`      | `force=false` (default): `manualRefresh` (respects cooldown + `isRunning`). `force=true`: direct `fullSync(client, cycleAll)`.                                                                      |
 | `/api/sync-course` | `POST { courseId, learningLanguage, fromLanguage }` | `syncCourseDetails` for a single course (may cycle via endpoint ⑥ if not active).                                                                                                                   |

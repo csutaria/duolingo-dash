@@ -11,7 +11,7 @@
  *
  * Priority:
  *   1. `DUOLINGO_TZ` env var (manual override).
- *   2. Duolingo profile timezone (Phase 2; loaded via `loadProfileTimezone`).
+ *   2. Duolingo profile timezone (`getStoredProfileTimezone` via `setProfileTimezoneLoader`).
  *   3. `Intl.DateTimeFormat().resolvedOptions().timeZone` (Node host).
  *
  * Profile-source resolution is wired by `setProfileTimezoneLoader` to

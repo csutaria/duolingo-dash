@@ -30,6 +30,8 @@ export interface DuolingoUser {
   learningLanguage: string;
   fromLanguage: string;
   motivation: string;
+  /** IANA zone from Duolingo user profile (e.g. `America/Los_Angeles`), when returned by API */
+  timezone?: string | null;
   courses: DuolingoCourse[];
   _achievements: DuolingoAchievement[];
 }

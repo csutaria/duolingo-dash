@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { migrateUserProfileTimezone } from "../db";
 
 let db: Database.Database;
 
@@ -241,6 +242,21 @@ describe("database schema", () => {
 
       expect(rows).toHaveLength(2);
       expect(rows[1].xp).toBe(1050);
+    });
+  });
+
+  describe("migrateUserProfileTimezone", () => {
+    it("adds timezone column when missing", () => {
+      migrateUserProfileTimezone(db);
+      const cols = db.prepare("PRAGMA table_info(user_profile)").all() as Array<{ name: string }>;
+      expect(cols.some((c) => c.name === "timezone")).toBe(true);
+    });
+
+    it("is idempotent", () => {
+      migrateUserProfileTimezone(db);
+      migrateUserProfileTimezone(db);
+      const cols = db.prepare("PRAGMA table_info(user_profile)").all() as Array<{ name: string }>;
+      expect(cols.filter((c) => c.name === "timezone")).toHaveLength(1);
     });
   });
 });

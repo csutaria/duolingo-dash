@@ -57,6 +57,13 @@ const panelHidden = "pointer-events-none invisible opacity-0";
 
 type SyncMode = "baseline" | "fast";
 
+function sourceLabel(source: string): string {
+  if (source === "env") return "DUOLINGO_TZ";
+  if (source === "profile") return "Duolingo profile";
+  if (source === "system") return "host";
+  return source;
+}
+
 function SyncStatusPanel({
   lastSync,
   syncError,
@@ -64,6 +71,8 @@ function SyncStatusPanel({
   paused,
   currentlyRunning,
   authenticated,
+  resolvedTimezone,
+  resolvedTimezoneSource,
   msUntilNextXpCheck,
   msUntilNextNightlySync,
   syncMode,
@@ -82,6 +91,8 @@ function SyncStatusPanel({
   paused: boolean;
   currentlyRunning: boolean;
   authenticated: boolean;
+  resolvedTimezone: string | null;
+  resolvedTimezoneSource: string | null;
   msUntilNextXpCheck: number | null;
   msUntilNextNightlySync: number | null;
   syncMode: SyncMode;
@@ -187,6 +198,18 @@ function SyncStatusPanel({
                   : "— (scheduling)"}
           </dd>
         </div>
+        {resolvedTimezone != null && resolvedTimezoneSource != null && (
+          <div className="flex gap-2">
+            <dt className="shrink-0 text-zinc-500">Timezone</dt>
+            <dd
+              className="min-w-0 break-all text-zinc-300"
+              title={`Resolved IANA timezone (R) for calendar days, XP daily rows, and the 02:00 nightly sync. Priority: DUOLINGO_TZ env → Duolingo profile (after sync) → host.`}
+            >
+              {resolvedTimezone}{" "}
+              <span className="text-zinc-500">({sourceLabel(resolvedTimezoneSource)})</span>
+            </dd>
+          </div>
+        )}
       </dl>
 
       {authenticated && (
@@ -287,6 +310,12 @@ export function SyncBar() {
   const msUntilNextXpCheck = (status?.msUntilNextXpCheck as number | null) ?? null;
   const msUntilNextNightlySync =
     (status?.msUntilNextNightlySync as number | null) ?? null;
+  const resolvedTimezone =
+    typeof status?.resolvedTimezone === "string" ? status.resolvedTimezone : null;
+  const resolvedTimezoneSource =
+    typeof status?.resolvedTimezoneSource === "string"
+      ? status.resolvedTimezoneSource
+      : null;
   const syncMode = ((status?.syncMode as SyncMode | undefined) ?? "baseline") as SyncMode;
   const fastIdleTicks = (status?.fastIdleTicks as number | undefined) ?? 0;
   const fastIdleTicksRequired = (status?.fastIdleTicksRequired as number | undefined) ?? 5;
@@ -383,6 +412,8 @@ export function SyncBar() {
           paused={paused}
           currentlyRunning={currentlyRunning}
           authenticated={authenticated}
+          resolvedTimezone={resolvedTimezone}
+          resolvedTimezoneSource={resolvedTimezoneSource}
           msUntilNextXpCheck={msUntilNextXpCheck}
           msUntilNextNightlySync={msUntilNextNightlySync}
           syncMode={syncMode}
