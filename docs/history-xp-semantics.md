@@ -132,6 +132,46 @@ Primary files:
 
 ---
 
+## Chart render-stability rules
+
+These rules exist to keep the stacked Area chart visually stable across
+view transitions (e.g. 7d → 1d → 7d). Recharts decides each Area's
+stack baseline from the order of the cartesian items it has registered
+internally; if Areas mount and unmount across renders, that registry
+order can drift and corrupt the visible stack on the return trip.
+
+Invariants enforced in `src/components/StackedXpChart.tsx`:
+
+- The `<Area>` children set is **stable across all views**:
+  - one Area per course id in `courseIds` (even courses with all-zero
+    values in the current window),
+  - plus the `_prior` and `_pretrack` Areas, always rendered, even when
+    their values are 0 across every row.
+- The dynamic sort ("smallest delta at the bottom, biggest on top") is
+  preserved by re-sorting the **render order** of the same Areas each
+  render, not by adding/removing them. Equal-valued series fall back
+  to alphabetical-by-id so the inactive zero pile is deterministic.
+- Tooltip uses a custom `content` component that filters out zero-value
+  rows so inactive courses don't clutter the hover panel.
+- The chart is keyed on `view` in `src/app/history/page.tsx`. This is
+  belt-and-suspenders on top of the stable child set above and makes
+  any residual recharts state get rebuilt on view change.
+
+### 1-day view: single-row synthesis
+
+Recharts cannot draw a stacked Area from a single data point — it
+falls back to a column of dots, and a 1-point stack has no shape to
+anchor stack baselines to.
+
+When `data.length === 1` (typically the 1d view), `StackedXpChart`
+synthesizes a leading start-of-day and trailing end-of-day point with
+the same values, so each course paints as a horizontal band across
+the day. The 1d X domain in `history/page.tsx` is anchored at
+midnight (instead of noon) so the synthesized band fills the full
+visible range.
+
+---
+
 ## Decision timeline (condensed)
 
 1. Initial history chart issue: bounded windows visually collapsed due to cumulative slabs.
@@ -153,11 +193,18 @@ Primary files:
 - Overview window XP card emphasis and inactive dimming.
 - History dual all-time model (change vs total) with explicit selector semantics.
 - History card sorting aligned with Overview behavior for change modes.
+- Meta cards for non-course series (`_untracked` / `_pretrack`).
+- Stack-order stability across view transitions: stable Area child set,
+  stable tiebreaker, custom tooltip filter, view-keyed remount.
+- 1-day view renders as horizontal lines via single-row synthesis.
 
 ### Open follow-ups
 
-- Add meta cards for non-course series (`_untracked` / `_pretrack`) and review whether the tracked line legend should remain.
-- Fix daily stacked bar ordering regression where `_untracked` can be visually overtaken after hover/window changes.
+- Decide whether the `Cumulative XP` line legend remains useful once
+  `Profile total XP` and per-course coverage are visible.
+- Daily stacked bar chart was previously suspected of a similar
+  ordering regression; current observation is no visible issue. Revisit
+  if it resurfaces.
 
 ---
 

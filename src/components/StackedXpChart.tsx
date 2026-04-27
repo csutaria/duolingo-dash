@@ -36,45 +36,77 @@ export function StackedXpChart({
   // All derived state is memoized so switching to all-time (which pushes
   // ~365 rows through the chart) doesn't re-walk `data` for every slice
   // on every render.
-  const withTime = useMemo(
-    () =>
-      data.map((d) => {
-        const [y, m, day] = String(d.date).split("-").map(Number);
-        return { ...d, _t: new Date(y, m - 1, day, 12).getTime() };
-      }),
-    [data],
-  );
+  //
+  // Single-row data (typically the 1d view) is special-cased: recharts
+  // can't draw a stacked Area from a single point — it falls back to a
+  // column of dots — and a 1-point stack has no shape for recharts to
+  // anchor its stack baseline to, which makes ordering brittle on view
+  // transitions. We synthesize a start-of-day and end-of-day point with
+  // the same values so each course paints as a horizontal band across
+  // the chart, and the stack has a proper area to render.
+  const withTime = useMemo(() => {
+    const rows = data.map((d) => {
+      const [y, m, day] = String(d.date).split("-").map(Number);
+      return { ...d, _t: new Date(y, m - 1, day, 12).getTime() };
+    });
+    if (rows.length !== 1) return rows;
+    const only = rows[0];
+    const t = new Date(only._t);
+    const startOfDay = new Date(t.getFullYear(), t.getMonth(), t.getDate(), 0, 0, 0).getTime();
+    const endOfDay = new Date(t.getFullYear(), t.getMonth(), t.getDate(), 23, 59, 59).getTime();
+    return [
+      { ...only, _t: startOfDay },
+      { ...only, _t: endOfDay },
+    ];
+  }, [data]);
 
-  const { sortedIds, hasPretrack, hasPrior, priorValue, yMin } = useMemo(() => {
+  // Render strategy notes:
+  //
+  // We render an <Area> for *every* course id in `courseIds`, plus the
+  // `_prior` and `_pretrack` series, on every render — even when their
+  // values for the current window are all zero. Two reasons:
+  //
+  // 1. Recharts decides each <Area>'s stack baseline from the order of
+  //    cartesian items it's seen registered. When children mount/unmount
+  //    between renders (e.g. 7d → 1d shrinks the active set, 1d → 7d
+  //    grows it back), that internal registry order can drift, and the
+  //    return trip to 7d can paint courses at the wrong y baseline.
+  //    A stable child set side-steps that entirely.
+  // 2. The dynamic sort (smallest delta first → bottom of the stack,
+  //    biggest on top) is preserved by re-sorting the *render order* of
+  //    the same Areas each render, not by adding/removing them.
+  //
+  // Inactive courses just contribute zero-height bands and are filtered
+  // from the tooltip below. The (otherwise unused) `_prior`/`_pretrack`
+  // dummy values are still painted invisibly so the children set stays
+  // stable across modes.
+  const { sortedIds, priorValue, yMin } = useMemo(() => {
     if (!data.length) {
-      return { sortedIds: [] as string[], hasPretrack: false, hasPrior: false, priorValue: 0, yMin: 0 };
+      return { sortedIds: [] as string[], priorValue: 0, yMin: 0 };
     }
     const last = data[data.length - 1];
-    const activeSet: string[] = [];
-    const nonZero: Record<string, boolean> = {};
-    let pretrack = false;
     let minTotal = Infinity;
     for (const row of data) {
       const t = Number(row._total ?? 0);
       if (t > 0 && t < minTotal) minTotal = t;
-      if (!pretrack && Number(row._pretrack ?? 0) > 0) pretrack = true;
-      for (const id of courseIds) {
-        if (!nonZero[id] && Number(row[id] ?? 0) > 0) nonZero[id] = true;
-      }
     }
-    for (const id of courseIds) if (nonZero[id]) activeSet.push(id);
-    activeSet.sort(
-      (a, b) => Number(last[a] ?? 0) - Number(last[b] ?? 0),
-    );
-    const prior = Number(data[0]?._prior ?? 0);
+    const ordered = [...courseIds].sort((a, b) => {
+      const av = Number(last[a] ?? 0);
+      const bv = Number(last[b] ?? 0);
+      if (av !== bv) return av - bv;
+      // Stable tiebreaker: alphabetical by id, so equal-valued series
+      // (typically the inactive zero pile) keep a deterministic order
+      // across views.
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
     return {
-      sortedIds: activeSet,
-      hasPretrack: pretrack,
-      hasPrior: prior > 0,
-      priorValue: prior,
+      sortedIds: ordered,
+      priorValue: Number(data[0]?._prior ?? 0),
       yMin: isFinite(minTotal) ? minTotal : 0,
     };
   }, [data, courseIds]);
+
+  const hasPrior = priorValue > 0;
 
   if (!data.length) {
     return <div className="text-zinc-500 text-sm">No XP history yet</div>;
@@ -155,58 +187,105 @@ export function StackedXpChart({
           />
           <Tooltip
             wrapperStyle={{ zIndex: 50 }}
-            contentStyle={{
-              backgroundColor: "#18181b",
-              border: "1px solid #27272a",
-              borderRadius: "6px",
-              color: "#e4e4e7",
-              fontSize: 11,
+            // Custom tooltip content: we render every course as an Area
+            // for stack-order stability (see top-of-file note), so the
+            // default tooltip would list a long row of "0" entries for
+            // inactive courses. Recharts' `formatter` can't exclude
+            // rows, so we filter here, sort by value desc, and label.
+            content={({ active, payload, label }) => {
+              if (!active || !payload || payload.length === 0) return null;
+              const items = payload
+                .filter((p) => Number(p.value) > 0)
+                .map((p) => {
+                  const k = String(p.dataKey ?? "");
+                  let name: string;
+                  if (k === "_prior") name = "Prior";
+                  else if (k === "_total") name = "Cumulative XP";
+                  else if (k === "_pretrack") name = "Pre-tracking";
+                  else name = courseNames[k] ?? k;
+                  return { k, name, value: Number(p.value), color: p.color ?? p.stroke };
+                })
+                .sort((a, b) => b.value - a.value);
+              if (items.length === 0) return null;
+              const d = new Date(Number(label));
+              const dateLabel = `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
+              return (
+                <div
+                  style={{
+                    backgroundColor: "#18181b",
+                    border: "1px solid #27272a",
+                    borderRadius: 6,
+                    color: "#e4e4e7",
+                    fontSize: 11,
+                    padding: "6px 10px",
+                    maxHeight: 280,
+                    overflowY: "auto",
+                  }}
+                >
+                  <div style={{ marginBottom: 4, color: "#a1a1aa" }}>{dateLabel}</div>
+                  {items.map((it) => (
+                    <div
+                      key={it.k}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        lineHeight: "16px",
+                      }}
+                    >
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        <span
+                          style={{
+                            display: "inline-block",
+                            width: 8,
+                            height: 8,
+                            borderRadius: 2,
+                            backgroundColor: it.color || "#71717a",
+                          }}
+                        />
+                        {it.name}
+                      </span>
+                      <span>{it.value.toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+              );
             }}
-            labelFormatter={(ts) => {
-              const d = new Date(Number(ts));
-              return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
-            }}
-            formatter={(value: unknown, key: unknown) => {
-              const k = String(key ?? "");
-              if (k === "_prior") return [Number(value).toLocaleString(), "Prior"];
-              if (k === "_total") return [Number(value).toLocaleString(), "Cumulative XP"];
-              if (k === "_pretrack") return [Number(value).toLocaleString(), "Pre-tracking"];
-              return [Number(value).toLocaleString(), courseNames[k] ?? k];
-            }}
-            itemSorter={(item) => -(Number(item.value) || 0)}
           />
 
-          {hasPrior && (
-            <Area
-              type="linear"
-              dataKey="_prior"
-              stackId="xp"
-              stroke="transparent"
-              fill="#18181b"
-              fillOpacity={1}
-              strokeWidth={0}
-              dot={false}
-              isAnimationActive={false}
-              activeDot={false}
-              name="Prior"
-              legendType="none"
-            />
-          )}
+          {/* `_prior`: invisible bottom slab so course Areas stack on
+              top of the prior baseline. Always rendered (even when the
+              value is 0) to keep the children set stable. */}
+          <Area
+            type="linear"
+            dataKey="_prior"
+            stackId="xp"
+            stroke="transparent"
+            fill="#18181b"
+            fillOpacity={1}
+            strokeWidth={0}
+            dot={false}
+            isAnimationActive={false}
+            activeDot={false}
+            name="Prior"
+            legendType="none"
+          />
 
-          {hasPretrack && (
-            <Area
-              type="linear"
-              dataKey="_pretrack"
-              stackId="xp"
-              stroke="#52525b"
-              fill="#3f3f46"
-              fillOpacity={0.55}
-              strokeWidth={1}
-              dot={false}
-              isAnimationActive={false}
-              name="Pre-tracking"
-            />
-          )}
+          {/* `_pretrack`: gap between profile/daily totals and per-course
+              snapshot sums. Always rendered for stable stacking. */}
+          <Area
+            type="linear"
+            dataKey="_pretrack"
+            stackId="xp"
+            stroke="#52525b"
+            fill="#3f3f46"
+            fillOpacity={0.55}
+            strokeWidth={1}
+            dot={false}
+            isAnimationActive={false}
+            name="Pre-tracking"
+          />
 
           {sortedIds.map((id) => (
             <Area

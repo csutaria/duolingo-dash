@@ -61,8 +61,15 @@ export default function HistoryPage() {
 
   const xpDomainStart = useMemo(() => {
     if (view === "total" || view === "all") return undefined;
+    const days = Number(view);
     const d = new Date();
-    d.setDate(d.getDate() - (Number(view) - 1));
+    if (days === 1) {
+      // 1d view: anchor the X axis at midnight so the synthesized
+      // start-of-day / end-of-day points (see StackedXpChart withTime)
+      // can render as a horizontal band across the full day.
+      return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0).getTime();
+    }
+    d.setDate(d.getDate() - (days - 1));
     return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12).getTime();
   }, [view]);
 
@@ -230,7 +237,16 @@ export default function HistoryPage() {
 
       {stackData && stackData.length > 0 && (
         <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+          {/*
+            key={view} forces a full remount on view change. Recharts caches
+            its registry of stacked <Area> children internally; if Areas come
+            and go between renders (e.g. 7d → 1d → 7d, where the active set
+            shrinks then grows), the stacking order gets corrupted on the
+            return trip. Remounting rebuilds that registry cleanly. With
+            isAnimationActive={false} this is visually instant.
+          */}
           <StackedXpChart
+            key={view}
             data={stackData}
             courseIds={courseIds}
             colors={colorMap}
