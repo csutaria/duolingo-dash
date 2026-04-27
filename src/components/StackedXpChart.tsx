@@ -131,7 +131,8 @@ export function StackedXpChart({
     : domainStart != null
       ? [Math.floor(yMin * 0.98), "dataMax"]
       : [0, "dataMax"];
-  const yFloorValue = typeof yDomain[0] === "number" ? yDomain[0] : null;
+  const yMinNum =
+    typeof yDomain[0] === "number" ? yDomain[0] : 0;
 
   // Compute the y-tick set ourselves (d3-style "nice" steps over
   // [yMinNum, yMaxNum]) so the tick formatter knows exactly which
@@ -157,7 +158,6 @@ export function StackedXpChart({
     }
     return isFinite(m) ? m : 0;
   })();
-  const yMinNum = yFloorValue ?? 0;
   const yTicks = (() => {
     if (yMaxNum <= yMinNum) return [yMinNum];
     const range = yMaxNum - yMinNum;
@@ -174,13 +174,13 @@ export function StackedXpChart({
     const start = Math.ceil(yMinNum / step) * step;
     const ticks: number[] = [];
     for (let v = start; v <= yMaxNum + step * 1e-9; v += step) ticks.push(v);
-    // Anchor floor and ceiling so the bolded floor label always
-    // matches `yFloorValue`, and `dataMax` always has a corresponding
-    // top tick. Skip duplicates via a 25%-of-step proximity check.
-    if (ticks.length === 0 || ticks[0] - yMinNum > step * 0.25) {
-      ticks.unshift(yMinNum);
-    }
-    if (yMaxNum - ticks[ticks.length - 1] > step * 0.25) {
+    // Anchor `dataMax` so the top of the chart always has a label.
+    // Don't anchor the floor: the bolded "floor" label is the lowest
+    // *nice* tick (matching recharts' pre-existing behaviour), not the
+    // exact `prior * 0.99` value — the buffer below it intentionally
+    // sits unlabelled.
+    if (ticks.length === 0) ticks.push(yMaxNum);
+    else if (yMaxNum - ticks[ticks.length - 1] > step * 0.25) {
       ticks.push(yMaxNum);
     }
     return ticks;
@@ -236,7 +236,8 @@ export function StackedXpChart({
                 y: number;
                 payload: { value: number };
               };
-              const isFloor = yFloorValue != null && Number(payload.value) === yFloorValue;
+              const isFloor =
+                yTicks.length > 0 && Number(payload.value) === yTicks[0];
               return (
                 <text
                   x={x}
