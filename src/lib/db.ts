@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
+import { formatLocalDate, setProfileTimezoneLoader } from "./tz";
 
 const DEMO_MODE = process.env.DEMO_MODE === "true";
 const DB_PATH = path.join(process.cwd(), "data", DEMO_MODE ? "mock.db" : "duolingo.db");
@@ -14,7 +15,37 @@ export function getDb(): Database.Database {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   initSchema(db);
+  registerLocalDateFn(db);
+  // Phase 2 wires `getStoredProfileTimezone` here. Until that lands,
+  // the resolver still works correctly via env -> system fallback.
+  setProfileTimezoneLoader(getStoredProfileTimezone);
   return db;
+}
+
+/**
+ * Register a `LOCAL_DATE(utc_string)` SQLite function that buckets a
+ * UTC-stored timestamp by calendar date in the resolved server zone
+ * (R). Marked non-deterministic so SQLite doesn't memoize across
+ * resolver-cache invalidations (e.g. when the Duolingo profile zone
+ * is updated by sync).
+ *
+ * Storage is UTC; this UDF is the read-side bridge into R.
+ *
+ * Exported so tests that create their own in-memory DBs (bypassing
+ * `getDb()`) can register the same function on their handle.
+ */
+export function registerLocalDateFn(db: Database.Database): void {
+  // `varargs: false, deterministic: false` — see better-sqlite3 docs.
+  db.function("LOCAL_DATE", { deterministic: false }, ((utc: unknown) => {
+    if (utc == null) return null;
+    const s = String(utc);
+    if (!s) return null;
+    const iso = s.includes("T") ? s : s.replace(" ", "T");
+    const withZ = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : iso + "Z";
+    const d = new Date(withZ);
+    if (Number.isNaN(d.getTime())) return null;
+    return formatLocalDate(d);
+  }) as (...args: unknown[]) => unknown);
 }
 
 function initSchema(db: Database.Database): void {
@@ -169,7 +200,11 @@ export function updateStreakEpochs(
   previousStreakLength: number | null,
 ): void {
   const db = getDb();
-  const today = new Date().toISOString().split("T")[0];
+  // `currentStreakStart` from Duolingo and `streak_epochs` rows are
+  // both keyed in R-ish calendar dates; comparing against UTC's
+  // `today` leaks a half-day boundary on hosts where R != UTC. Use
+  // R-today instead.
+  const today = formatLocalDate(new Date());
 
   // Never act on a streak_start that is today — intra-day sync before practice
   if (currentStreakStart >= today) return;
@@ -190,10 +225,12 @@ export function updateStreakEpochs(
 
   if (open.streak_start_date === currentStreakStart) return; // Same streak, nothing to do
 
-  // Streak changed: close old epoch, open new one
-  const endD = new Date(`${currentStreakStart}T12:00:00`);
-  endD.setDate(endD.getDate() - 1);
-  const endDate = endD.toISOString().split("T")[0];
+  // Streak changed: close old epoch, open new one (one day before the
+  // new start). Pure date-string arithmetic — no host-zone influence.
+  const [y, m, d] = currentStreakStart.split("-").map(Number);
+  const endMs = Date.UTC(y, m - 1, d) - 86400000;
+  const endDt = new Date(endMs);
+  const endDate = `${endDt.getUTCFullYear()}-${String(endDt.getUTCMonth() + 1).padStart(2, "0")}-${String(endDt.getUTCDate()).padStart(2, "0")}`;
 
   db.prepare(
     "UPDATE streak_epochs SET streak_end_date = ?, streak_length = ? WHERE id = ?",
@@ -206,10 +243,15 @@ export function updateStreakEpochs(
 
 export function backfillImpliedFreeze(currentStreakStart: string): void {
   const db = getDb();
+  // `xp_daily.date` is keyed in R (the resolved server zone), so the
+  // "today" cutoff must also be expressed in R. `DATE('now')` returns
+  // a UTC date and would mis-bucket the boundary day for hosts where
+  // R != UTC. `LOCAL_DATE(datetime('now'))` converts UTC-now to a
+  // calendar date in R.
   db.prepare(`
     UPDATE xp_daily SET implied_freeze = 1
     WHERE date >= ?
-      AND date < DATE('now')
+      AND date < LOCAL_DATE(datetime('now'))
       AND gained_xp = 0
       AND streak_extended = 0
       AND frozen = 0
@@ -284,6 +326,22 @@ export function getMedianDurationMs(cycleAll: boolean, limit = 3): number | null
   if (durations.length === 0) return null;
   const sorted = [...durations].sort((a, b) => a - b);
   return sorted[Math.floor(sorted.length / 2)];
+}
+
+/**
+ * Read the Duolingo profile timezone, if persisted. Returns null in
+ * Phase 1 (column doesn't exist yet) — Phase 2 adds the column and
+ * `upsertProfile` writes it. The resolver in `tz.ts` falls back
+ * cleanly through env -> system when this returns null.
+ */
+export function getStoredProfileTimezone(): string | null {
+  const db = getDb();
+  const cols = db.prepare("PRAGMA table_info(user_profile)").all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === "timezone")) return null;
+  const row = db.prepare("SELECT timezone FROM user_profile WHERE id = 1").get() as
+    | { timezone: string | null }
+    | undefined;
+  return row?.timezone ?? null;
 }
 
 export function upsertProfile(data: Record<string, unknown>): void {

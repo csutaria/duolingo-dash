@@ -16,6 +16,7 @@ import {
 import { resolveLegacyLanguageData } from "./legacy-language-data";
 import { clearCurrentSync, setCurrentSync } from "./sync-state";
 import { DuolingoUser, XpSummary } from "./types";
+import { formatLocalDate, getResolvedTimezone } from "./tz";
 
 export interface SyncResult {
   type: "quick" | "full" | "skipped";
@@ -155,16 +156,28 @@ async function saveXpHistory(client: DuolingoClient): Promise<void> {
   const now = new Date();
   const startDate = new Date(now);
   startDate.setFullYear(startDate.getFullYear() - 1);
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  // Use the resolved server zone (R) so the request range, the
+  // returned bucket boundaries, and our `xp_daily.date` keys all
+  // agree. Duolingo's `xp_summaries` endpoint keys daily buckets in
+  // the timezone we pass it.
+  const tz = getResolvedTimezone();
 
-  const fmt = (d: Date) => d.toISOString().split("T")[0];
-  const data = await client.getXpSummaries(fmt(startDate), fmt(now), tz);
+  // Range bounds in R-calendar dates. `toISOString().split('T')[0]`
+  // is UTC and would skew by up to ±1 day for hosts where R != UTC.
+  const data = await client.getXpSummaries(
+    formatLocalDate(startDate, tz),
+    formatLocalDate(now, tz),
+    tz,
+  );
 
   if (data.summaries) {
     const mapped = data.summaries
       .filter((s: XpSummary) => s.date != null)
       .map((s: XpSummary) => ({
-        date: new Date((s.date ?? 0) * 1000).toISOString().split("T")[0],
+        // `s.date` is the unix-second start-of-day in the requested
+        // tz. Format the resulting instant in R so the row keys match
+        // what other code (queries, charts, streak logic) expects.
+        date: formatLocalDate((s.date ?? 0) * 1000, tz),
         gainedXp: s.gainedXp ?? 0,
         frozen: s.frozen ?? false,
         streakExtended: s.streakExtended ?? false,

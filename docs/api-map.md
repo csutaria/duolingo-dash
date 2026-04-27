@@ -35,10 +35,12 @@ JWT (env var)
 *Returns:* just `totalXp` — used only to decide whether a full sync is worth running
 
 **③ `GET /2017-06-30/users/{userId}/xp_summaries?startDate=&endDate=&timezone=*`* — XP history  
-*Input:* `userId`, date range (last 1 year), server's local timezone  
+*Input:* `userId`, date range (last 1 year), resolved app timezone (**R**, not necessarily host timezone)  
 *Scope:* **account-wide** — all languages combined into one daily total  
 *Returns:* per-day: `gainedXp`, `frozen`, `streakExtended`, `dailyGoalXp`, `numSessions`, `totalSessionTime`  
 *Limitation:* no per-language breakdown
+
+Deployment note: on UTC hosts, if `DUOLINGO_TZ` is unset and no profile timezone is persisted, `R` may resolve to `UTC`; then endpoint ③ buckets by UTC calendar days. Set `DUOLINGO_TZ` explicitly for user-local day semantics.
 
 **④ `GET /vocabulary/overview*`* — vocab for active course  
 *Input:* **none in the URL** — uses active course implicitly from account state  
@@ -142,7 +144,7 @@ Two tables maintained locally (no direct Duolingo API equivalent):
 
 `updateStreakEpochs` guards against intra-day syncs (`startDate >= today` → early return). First sync ever inserts the initial epoch. Subsequent syncs that detect a new `startDate` close the old epoch (`streak_end_date = newStart - 1 day`) and open a new one.
 
-**`xp_daily.implied_freeze`** — column added by `migrateStreakTracking`. Set to `1` by `backfillImpliedFreeze` for zero-XP days within the current streak window (`date >= currentStreakStart AND date < DATE('now')`) that are not already marked `frozen` or `streak_extended`. Represents days where a streak shield was inferred to have been used — Duolingo's API doesn't flag these as `frozen` but they occurred within a streak that survived.
+**`xp_daily.implied_freeze`** — column added by `migrateStreakTracking`. Set to `1` by `backfillImpliedFreeze` for zero-XP days within the current streak window (`date >= currentStreakStart AND date < LOCAL_DATE(datetime('now'))`) that are not already marked `frozen` or `streak_extended`. Represents days where a streak shield was inferred to have been used — Duolingo's API doesn't flag these as `frozen` but they occurred within a streak that survived.
 
 `implied_freeze` is used by `DailyMetricChart` for per-day background coloring (ice color) but is **not** included in `XP_STATS_SQL` aggregates — `freeze_days` counts only API-reported `frozen = 1` rows.
 

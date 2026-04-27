@@ -22,7 +22,7 @@ Browser (Next.js client) ─► Next.js API routes (server) ─► duolingo.com
 3. **Quiet-detector (fast mode)**: when baseline sees XP changed vs last full sync, start polling `totalXp` every 2 min.
    - Any observed XP change → immediately return to baseline. Do **not** extend fast mode.
    - 5 consecutive unchanged fast ticks (10 min of quiet) → fire `fullSync(cycleAll=true)` → return to baseline.
-4. **Nightly once at 02:00 server local time.** `quickCheck` first:
+4. **Nightly once at 02:00 in the resolved timezone (R).** `quickCheck` first:
    - If XP changed vs last full sync → enter fast mode (if not already). Do not force a sync.
    - If XP unchanged → run `fullSync(cycleAll=true)`. Covers idle days.
 5. **Pause** stops all three: baseline, fast, nightly. Pause is in-memory only — process restart always resumes polling.
@@ -51,6 +51,40 @@ Browser (Next.js client) ─► Next.js API routes (server) ─► duolingo.com
 
 `ensureClient()` lazily creates the client from `DUOLINGO_JWT` and starts polling **unless `userPaused` is true**.
 
+## Timezone model (critical)
+
+The app uses two timezone concepts:
+
+- **S (host/system timezone):** the machine/process timezone (`Intl` on that host).
+- **R (resolved app timezone):** the timezone used for all day-boundary logic.
+
+`R` priority:
+
+1. `DUOLINGO_TZ` env var (explicit override)
+2. Duolingo profile timezone (when persisted; see roadmap below)
+3. Host/system timezone (`Intl.DateTimeFormat().resolvedOptions().timeZone`)
+
+Rules:
+
+- UTC timestamps are still stored as UTC in SQLite.
+- Any "which day is this?" decision must use **R**, not raw UTC and not host-local calendar extraction.
+- Nightly scheduling computes "next 02:00 in R" and then converts that wall-clock target to an epoch delay.
+
+### UTC-host deployment note
+
+If you deploy on a server configured to UTC, that only fixes **S**. It does **not** automatically mean "02:00 in your local timezone."
+
+- Without `DUOLINGO_TZ` (or a persisted profile timezone), `R` often falls through to `S=UTC`.
+- In that case nightly runs happen at **02:00 UTC**.
+- If you want nightly at, for example, Pacific time on a UTC host, set `DUOLINGO_TZ=America/Los_Angeles` (or persist/profile-source that zone once Phase 2 lands).
+
+Deployment checklist (single-user/self-host):
+
+1. Pick the user's wall-clock zone (for example, `America/Los_Angeles`).
+2. Set `DUOLINGO_TZ` on the host to that IANA name.
+3. Verify at runtime that `msUntilNextNightlySync` (from `/api/status`) counts down to the next 02:00 in that zone.
+4. Keep host OS timezone independent (UTC is fine). Scheduling uses **R**, not host-local midnight math.
+
 ## Polling pipeline
 
 `startPolling(client)` arms three independent schedules on the shared bucket:
@@ -60,7 +94,7 @@ Browser (Next.js client) ─► Next.js API routes (server) ─► duolingo.com
 | --------------- | -------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `baselineTimer` | `setInterval`        | 30 min                              | `baselineTick`: `quickCheck`. If XP changed vs last sync and in baseline mode → enter fast mode. Never fires `fullSync`. |
 | `fastTimer`     | `setInterval`        | 2 min (only while `mode === "fast"`) | `fastTick`: `getTotalXp`. Any change → revert to baseline. 5 unchanged ticks → `fullSync(cycleAll=true)` → revert.       |
-| `nightlyTimer`  | chained `setTimeout` | next 02:00 local                    | `nightlyTick`: `quickCheck`. Changed → enter fast mode (no sync). Unchanged → `fullSync(cycleAll=true)`. Re-arms.        |
+| `nightlyTimer`  | chained `setTimeout` | next 02:00 in R                     | `nightlyTick`: `quickCheck`. Changed → enter fast mode (no sync). Unchanged → `fullSync(cycleAll=true)`. Re-arms.        |
 
 
 State transitions (pure, unit-tested as `advanceSyncState`):
@@ -84,7 +118,7 @@ Guards:
 ```
   startPolling(client)
   ├── setInterval(baselineTick, 30m)
-  ├── setTimeout(nightlyTick, msUntilNextLocalTime(2))      // chained
+  ├── setTimeout(nightlyTick, msUntilNextLocalTime(2))      // next 02:00 in R; chained
   ├── (fastTimer armed on demand when baseline detects change)
   └── if (!isRunning && currentSync == null) kickoff baselineTick
 ```

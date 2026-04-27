@@ -2,6 +2,7 @@ import { DuolingoClient } from "./duolingo";
 import { quickCheck, fullSync, SyncResult } from "./sync";
 import { getCurrentSync, CurrentSync } from "./sync-state";
 import { getPollingState } from "./polling-state";
+import { epochMsForLocalTime, getLocalParts } from "./tz";
 
 /**
  * @internal exported for tests
@@ -104,25 +105,31 @@ export function advanceSyncState(
 }
 
 /**
- * Compute ms until the next occurrence of `hour:00:00.000` in server local
- * time. Recomputed fresh each nightly cycle so DST transitions, clock skew,
- * and process sleep/wake are all handled naturally.
+ * Compute ms until the next occurrence of `hour:00:00.000` in the
+ * resolved server zone (R), not the host's process-local zone.
+ *
+ * Recomputed fresh each nightly cycle so DST transitions, clock skew,
+ * resolver-source changes, and process sleep/wake all settle on the
+ * next call rather than drifting silently.
  */
 export function msUntilNextLocalTime(hour: number, now: number = Date.now()): number {
-  const d = new Date(now);
-  const target = new Date(
-    d.getFullYear(),
-    d.getMonth(),
-    d.getDate(),
-    hour,
-    0,
-    0,
-    0,
-  );
-  if (target.getTime() <= now) {
-    target.setDate(target.getDate() + 1);
+  // "Today" in R, anchored at the requested hour.
+  const parts = getLocalParts(now);
+  let target = epochMsForLocalTime(parts.year, parts.month, parts.day, hour);
+  if (target <= now) {
+    // Roll the *R-local* day forward, then convert back to epoch ms.
+    // Date math via UTC midnight keeps the day-bump zone-agnostic; the
+    // epoch conversion below picks the right offset (incl. across DST).
+    const utc = Date.UTC(parts.year, parts.month - 1, parts.day) + 86400000;
+    const next = new Date(utc);
+    target = epochMsForLocalTime(
+      next.getUTCFullYear(),
+      next.getUTCMonth() + 1,
+      next.getUTCDate(),
+      hour,
+    );
   }
-  return target.getTime() - now;
+  return target - now;
 }
 
 // ─── Timer mechanics ──────────────────────────────────────────────────────

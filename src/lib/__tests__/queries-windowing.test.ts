@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { registerLocalDateFn } from "../db";
 
 /**
  * Regression tests for the "days = N returns exactly N calendar days
@@ -11,9 +12,15 @@ import Database from "better-sqlite3";
 
 type QueriesModule = typeof import("../queries");
 
-function makeDb(): Database.Database {
+function makeDb(register: (db: Database.Database) => void = registerLocalDateFn): Database.Database {
   const db = new Database(":memory:");
   db.pragma("journal_mode = WAL");
+  // Queries depend on the LOCAL_DATE UDF normally registered in
+  // db.ts:getDb(); replicate that for in-memory test DBs. Allow the
+  // caller to inject the fresh-module variant when running under
+  // module-reset (timezone tests need the UDF closed over the
+  // currently active tz module).
+  register(db);
   db.exec(`
     CREATE TABLE course_snapshots (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -311,5 +318,181 @@ describe("getCourseXpHistory (_pretrack / ideal anchor)", () => {
         Number(row._total),
       );
     }
+  });
+});
+
+/**
+ * Timezone-correctness regression tests.
+ *
+ * The dashboard stores `course_snapshots.snapshot_time` in UTC. Day
+ * bucketing must follow the resolved server zone (R), not raw UTC,
+ * or evening-PT practice (which lands on the next UTC day) gets
+ * misattributed to the following local day's window.
+ *
+ * The original report: 6–9 PM PT practice on Apr 25 produced ~1415
+ * XP, correctly attributed by Duolingo to Apr 25. The dashboard's
+ * `getCourseXpHistory(1)` for the Apr 26 (PT) window showed those XP
+ * as a same-day delta because the snapshot timestamps fell on
+ * 2026-04-26 in UTC.
+ */
+describe("timezone-aware day bucketing", () => {
+  const ORIGINAL_ENV = process.env.DUOLINGO_TZ;
+  let db: Database.Database;
+  let mod: QueriesModule;
+
+  function setupAt(zone: string, nowMs: number): void {
+    process.env.DUOLINGO_TZ = zone;
+    jest.resetModules();
+    jest.useFakeTimers({ now: nowMs, doNotFake: ["nextTick", "setImmediate"] });
+    // Require everything fresh from the same module graph so the
+    // tz module read by `db.ts` (for LOCAL_DATE) is the same one
+    // `queries.ts` consults for "today" — and so the resolver
+    // cache reflects the new env var.
+    const dbMod = require("../db") as typeof import("../db");
+    db = makeDb(dbMod.registerLocalDateFn);
+    jest.doMock("../db", () => ({
+      ...dbMod,
+      getDb: () => db,
+      getLastSync: () => null,
+      getLastFullSync: () => null,
+    }));
+    mod = require("../queries") as QueriesModule;
+    const tzMod = require("../tz") as typeof import("../tz");
+    tzMod._resetForTests();
+  }
+
+  afterEach(() => {
+    db?.close();
+    jest.useRealTimers();
+    jest.resetModules();
+    jest.dontMock("../db");
+    if (ORIGINAL_ENV == null) delete process.env.DUOLINGO_TZ;
+    else process.env.DUOLINGO_TZ = ORIGINAL_ENV;
+  });
+
+  it("PT: evening-PT practice on Apr 25 stays in Apr 25's bucket (1d window for Apr 26 = 0)", () => {
+    // Pretend "now" is Apr 26 2026, 09:00 PT (= 16:00 UTC).
+    const nowMs = Date.UTC(2026, 3, 26, 16, 0, 0);
+    setupAt("America/Los_Angeles", nowMs);
+
+    // Two snapshots on Apr 25 evening PT:
+    //   18:30 PT = 2026-04-26 01:30 UTC  (300 XP)
+    //   21:00 PT = 2026-04-26 04:00 UTC  (400 XP) ← latest pre-window
+    // No snapshot on Apr 26 PT yet.
+    db.prepare("INSERT INTO user_profile (id, total_xp) VALUES (1, 1000)").run();
+    db.prepare(
+      `INSERT INTO course_snapshots (snapshot_time, course_id, learning_language, from_language, title, xp, crowns, streak)
+       VALUES
+         ('2026-04-26T01:30:00', 'C1', 'es', 'en', 'Spanish', 300, 0, 0),
+         ('2026-04-26T04:00:00', 'C1', 'es', 'en', 'Spanish', 400, 0, 0)`,
+    ).run();
+
+    // 1-day window for "today" (Apr 26 PT) — both queries should
+    // report 0 same-day delta because the practice happened on
+    // Apr 25 PT, not Apr 26 PT.
+    const xpRows = mod.getCourseXpHistory(1);
+    expect(xpRows).toHaveLength(1);
+    expect(xpRows[0].date).toBe("2026-04-26");
+    expect(Number(xpRows[0].C1)).toBe(0);
+
+    const dailyRows = mod.getCourseXpDailyHistory(1);
+    expect(dailyRows).toHaveLength(1);
+    expect(dailyRows[0].date).toBe("2026-04-26");
+    expect(Number(dailyRows[0].C1)).toBe(0);
+
+    // Also: the underlying LOCAL_DATE bucketing pins these snapshots
+    // to Apr 25 in PT.
+    const buckets = db
+      .prepare(
+        "SELECT LOCAL_DATE(snapshot_time) as d FROM course_snapshots ORDER BY snapshot_time ASC",
+      )
+      .all() as Array<{ d: string }>;
+    expect(buckets.map((r) => r.d)).toEqual(["2026-04-25", "2026-04-25"]);
+  });
+
+  it("UTC host: same data buckets to Apr 26 (raw UTC dates)", () => {
+    // Sanity check: the UDF reflects the resolved zone. Under R=UTC
+    // the same instants land on Apr 26.
+    const nowMs = Date.UTC(2026, 3, 26, 16, 0, 0);
+    setupAt("UTC", nowMs);
+
+    db.prepare("INSERT INTO user_profile (id, total_xp) VALUES (1, 1000)").run();
+    db.prepare(
+      `INSERT INTO course_snapshots (snapshot_time, course_id, learning_language, from_language, title, xp, crowns, streak)
+       VALUES
+         ('2026-04-26T01:30:00', 'C1', 'es', 'en', 'Spanish', 300, 0, 0),
+         ('2026-04-26T04:00:00', 'C1', 'es', 'en', 'Spanish', 400, 0, 0)`,
+    ).run();
+
+    const buckets = db
+      .prepare(
+        "SELECT LOCAL_DATE(snapshot_time) as d FROM course_snapshots ORDER BY snapshot_time ASC",
+      )
+      .all() as Array<{ d: string }>;
+    expect(buckets.map((r) => r.d)).toEqual(["2026-04-26", "2026-04-26"]);
+  });
+
+  it("IST: snapshot taken just before midnight UTC stays in 'today' (IST)", () => {
+    // 23:30 UTC on 2026-04-25 = 05:00 IST on 2026-04-26.
+    // Under R=Asia/Kolkata, that snapshot must bucket to Apr 26.
+    const nowMs = Date.UTC(2026, 3, 26, 6, 30, 0); // 12:00 IST
+    setupAt("Asia/Kolkata", nowMs);
+
+    db.prepare("INSERT INTO user_profile (id, total_xp) VALUES (1, 500)").run();
+    db.prepare(
+      `INSERT INTO course_snapshots (snapshot_time, course_id, learning_language, from_language, title, xp, crowns, streak)
+       VALUES ('2026-04-25T23:30:00', 'C1', 'es', 'en', 'Spanish', 100, 0, 0)`,
+    ).run();
+
+    const buckets = db
+      .prepare(
+        "SELECT LOCAL_DATE(snapshot_time) as d FROM course_snapshots ORDER BY snapshot_time ASC",
+      )
+      .all() as Array<{ d: string }>;
+    expect(buckets).toEqual([{ d: "2026-04-26" }]);
+  });
+});
+
+/**
+ * Sync-side regression: `xp_daily.date` must be formatted in R when
+ * persisting Duolingo `xp_summaries` rows. The pre-fix code used
+ * `new Date(s.date * 1000).toISOString().split('T')[0]`, which is a
+ * UTC date and skews by ±1 day for hosts where R != UTC.
+ *
+ * This test exercises `formatLocalDate` directly with the same
+ * inputs the sync path produces, asserting the IST off-by-one
+ * regression is fixed.
+ */
+describe("xp_daily.date formatting (IST regression)", () => {
+  const ORIGINAL_ENV = process.env.DUOLINGO_TZ;
+
+  beforeEach(() => {
+    process.env.DUOLINGO_TZ = "Asia/Kolkata";
+    jest.resetModules();
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_ENV == null) delete process.env.DUOLINGO_TZ;
+    else process.env.DUOLINGO_TZ = ORIGINAL_ENV;
+    jest.resetModules();
+  });
+
+  it("formats a UTC-second timestamp as the IST calendar day, not UTC", () => {
+    const tz = require("../tz") as typeof import("../tz");
+    // Duolingo's xp_summaries returns `date` as the unix-second start
+    // of the local day in the requested tz. For IST, 2026-04-26 starts
+    // at 18:30 UTC on Apr 25.
+    const startOfIstDaySec = Math.floor(Date.UTC(2026, 3, 25, 18, 30, 0) / 1000);
+
+    // Old behavior: new Date(_*1000).toISOString().split('T')[0]
+    //   -> "2026-04-25" (UTC), wrong — this row is "today" in IST.
+    const oldUtcDate = new Date(startOfIstDaySec * 1000)
+      .toISOString()
+      .split("T")[0];
+    expect(oldUtcDate).toBe("2026-04-25");
+
+    // New behavior: formatLocalDate(ms, R) -> "2026-04-26" (IST), right.
+    const newDate = tz.formatLocalDate(startOfIstDaySec * 1000, "Asia/Kolkata");
+    expect(newDate).toBe("2026-04-26");
   });
 });

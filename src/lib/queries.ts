@@ -1,4 +1,22 @@
 import { getDb, getLastSync, getLastFullSync } from "./db";
+import { formatLocalDate } from "./tz";
+
+/**
+ * Increment a `YYYY-MM-DD` date string by `days` (may be negative).
+ * Pure string/integer math via UTC midnight — no timezone involvement,
+ * so calendar walks behave consistently regardless of host or
+ * resolved zone. ISO date strings sort lexicographically, so callers
+ * can compare with `<`, `<=` directly.
+ */
+function addDaysToDateStr(d: string, days: number): string {
+  const [y, m, day] = d.split("-").map(Number);
+  const t = Date.UTC(y, m - 1, day) + days * 86400000;
+  const dt = new Date(t);
+  const yy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getUTCDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
 
 export function getProfile() {
   const db = getDb();
@@ -199,15 +217,9 @@ export function getCourseXpHistory(
     stack ?? (hasDayCount ? "delta" : "cumulative");
   const useDelta = resolvedStack === "delta";
 
-  const toDateStr = (d: Date) => {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  };
-
-  const today = new Date();
-  const todayStr = toDateStr(today);
+  // "Today" is the calendar day in the resolved server zone (R), not
+  // the host's local zone. See `src/lib/tz.ts` for resolution priority.
+  const todayStr = formatLocalDate(new Date());
 
   // Anchors for the "ideal cumulative" curve driving _pretrack and _total:
   //   idealAt(D) = anchor + sum(xp_daily.gained_xp for date <= D)
@@ -230,14 +242,16 @@ export function getCourseXpHistory(
   // including today", so walking startStr..todayStr inclusive yields N rows.
   // All-time mode extends backward to min(first snapshot, first xp_daily)
   // so the chart shows pre-tracking history driven by xp_daily.
+  //
+  // Both arithmetic (subtracting days) and bucketing (LOCAL_DATE) are
+  // keyed by R, so daylight-saving and host-zone differences don't
+  // skew the window.
   let startStr: string;
   if (useDelta && hasDayCount) {
-    const s = new Date(today);
-    s.setDate(s.getDate() - (days! - 1));
-    startStr = toDateStr(s);
+    startStr = addDaysToDateStr(todayStr, -(days! - 1));
   } else {
     const snapRow = db.prepare(
-      "SELECT MIN(DATE(snapshot_time)) as d FROM course_snapshots"
+      "SELECT MIN(LOCAL_DATE(snapshot_time)) as d FROM course_snapshots"
     ).get() as { d: string | null };
     const xpRow = db.prepare(
       "SELECT MIN(date) as d FROM xp_daily"
@@ -258,6 +272,7 @@ export function getCourseXpHistory(
   ).map((r) => r.course_id);
 
   // Baseline: last known xp per course strictly before the window start
+  // (in R: any snapshot whose local date is before startStr).
   const lastKnown: Record<string, number> = {};
   if (useDelta) {
     (
@@ -267,7 +282,7 @@ export function getCourseXpHistory(
         INNER JOIN (
           SELECT course_id, MAX(snapshot_time) as max_t
           FROM course_snapshots
-          WHERE DATE(snapshot_time) < ?
+          WHERE LOCAL_DATE(snapshot_time) < ?
           GROUP BY course_id
         ) pre ON cs.course_id = pre.course_id AND cs.snapshot_time = pre.max_t
       `).all(startStr) as Array<{ course_id: string; xp: number }>
@@ -279,13 +294,16 @@ export function getCourseXpHistory(
   // baselines; rows are total XP per course.
   const baselineCourses: Record<string, number> = useDelta ? { ...lastKnown } : {};
 
-  // All snapshots from startStr onward — dedup to last per (course_id, date)
+  // All snapshots from startStr onward — dedup to last per (course_id,
+  // local-date). LOCAL_DATE buckets by R; raw snapshot_time ASC ensures
+  // the last write wins, so each `byDay` entry is the latest XP value
+  // observed on that local day.
   const byDay = new Map<string, number>();
   (
     db.prepare(`
-      SELECT course_id, DATE(snapshot_time) as date, xp
+      SELECT course_id, LOCAL_DATE(snapshot_time) as date, xp
       FROM course_snapshots
-      WHERE DATE(snapshot_time) >= ?
+      WHERE LOCAL_DATE(snapshot_time) >= ?
       ORDER BY snapshot_time ASC
     `).all(startStr) as Array<{ course_id: string; date: string; xp: number }>
   ).forEach((r) => { byDay.set(`${r.course_id}\0${r.date}`, r.xp); });
@@ -314,14 +332,13 @@ export function getCourseXpHistory(
   const idealAtD0 = haveIdeal ? anchor + cumXpDailyPreWindow : baselineSum;
   const prior = useDelta ? Math.max(idealAtD0, baselineSum) : 0;
 
-  // Walk date range, forward-filling each course and advancing cumXpDaily.
+  // Walk date range, forward-filling each course and advancing
+  // cumXpDaily. Walking pure ISO date strings (lexicographic compare,
+  // UTC-midnight arithmetic) keeps the loop independent of host or
+  // resolved zone.
   const result: Array<Record<string, unknown>> = [];
-  const cur = new Date(`${startStr}T12:00:00`);
-  const endMs = new Date(`${todayStr}T12:00:00`).getTime();
-
-  while (cur.getTime() <= endMs) {
-    const date = toDateStr(cur);
-
+  let date = startStr;
+  while (date <= todayStr) {
     while (
       xpDailyIdx < xpDailyRows.length &&
       xpDailyRows[xpDailyIdx].date <= date
@@ -365,7 +382,7 @@ export function getCourseXpHistory(
     row._total = total;
 
     result.push(row);
-    cur.setDate(cur.getDate() + 1);
+    date = addDaysToDateStr(date, 1);
   }
 
   return result;
@@ -374,25 +391,17 @@ export function getCourseXpHistory(
 export function getCourseXpDailyHistory(days?: number): Array<Record<string, unknown>> {
   const db = getDb();
 
-  const toDateStr = (d: Date) => {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  };
-
-  const today = new Date();
-  const todayStr = toDateStr(today);
+  // "Today" is the calendar day in the resolved server zone (R), so
+  // bucket boundaries match `xp_daily.date` (also keyed in R).
+  const todayStr = formatLocalDate(new Date());
 
   // `days = N` means "last N calendar days including today".
   let startStr: string;
   if (days) {
-    const s = new Date(today);
-    s.setDate(s.getDate() - (days - 1));
-    startStr = toDateStr(s);
+    startStr = addDaysToDateStr(todayStr, -(days - 1));
   } else {
     const snapRow = db.prepare(
-      "SELECT MIN(DATE(snapshot_time)) as d FROM course_snapshots"
+      "SELECT MIN(LOCAL_DATE(snapshot_time)) as d FROM course_snapshots"
     ).get() as { d: string | null };
     if (!snapRow?.d) return []; // No snapshot structure → no course IDs to iterate
 
@@ -412,7 +421,8 @@ export function getCourseXpDailyHistory(days?: number): Array<Record<string, unk
 
   if (courseIds.length === 0) return [];
 
-  // Baseline: last known xp per course strictly before the window start
+  // Baseline: last known xp per course strictly before the window
+  // start (in R: any snapshot whose local date is before startStr).
   const lastKnown: Record<string, number | undefined> = {};
   if (days) {
     (
@@ -422,25 +432,27 @@ export function getCourseXpDailyHistory(days?: number): Array<Record<string, unk
         INNER JOIN (
           SELECT course_id, MAX(snapshot_time) as max_t
           FROM course_snapshots
-          WHERE DATE(snapshot_time) < ?
+          WHERE LOCAL_DATE(snapshot_time) < ?
           GROUP BY course_id
         ) pre ON cs.course_id = pre.course_id AND cs.snapshot_time = pre.max_t
       `).all(startStr) as Array<{ course_id: string; xp: number }>
     ).forEach((b) => { lastKnown[b.course_id] = b.xp; });
   }
 
-  // Last xp per (course_id, date) within the window — dedup to last snapshot per day
+  // Last xp per (course_id, local-date) within the window — dedup to
+  // last snapshot per local day in R.
   const snapsByDay = new Map<string, number>();
   (
     db.prepare(`
-      SELECT course_id, DATE(snapshot_time) as date, xp
+      SELECT course_id, LOCAL_DATE(snapshot_time) as date, xp
       FROM course_snapshots
-      WHERE DATE(snapshot_time) >= ?
+      WHERE LOCAL_DATE(snapshot_time) >= ?
       ORDER BY snapshot_time ASC
     `).all(startStr) as Array<{ course_id: string; date: string; xp: number }>
   ).forEach((r) => { snapsByDay.set(`${r.course_id}\0${r.date}`, r.xp); });
 
-  // xp_daily totals for the window (authoritative daily total)
+  // xp_daily totals for the window (authoritative daily total, also
+  // keyed in R since we pass R when fetching xp_summaries).
   const xpDailyMap = new Map<string, number>();
   const xpDailyRows = days
     ? db.prepare("SELECT date, gained_xp FROM xp_daily WHERE date >= ? ORDER BY date ASC").all(startStr)
@@ -449,13 +461,11 @@ export function getCourseXpDailyHistory(days?: number): Array<Record<string, unk
     xpDailyMap.set(r.date, r.gained_xp);
   });
 
-  // Walk date range, computing per-course deltas and untracked gap
+  // Walk date range as ISO strings; comparison is lexicographic and
+  // arithmetic uses UTC midnight, so the walk is zone-agnostic.
   const result: Array<Record<string, unknown>> = [];
-  const cur = new Date(`${startStr}T12:00:00`);
-  const endMs = new Date(`${todayStr}T12:00:00`).getTime();
-
-  while (cur.getTime() <= endMs) {
-    const date = toDateStr(cur);
+  let date = startStr;
+  while (date <= todayStr) {
     const row: Record<string, unknown> = { date };
     let sumDeltas = 0;
 
@@ -477,7 +487,7 @@ export function getCourseXpDailyHistory(days?: number): Array<Record<string, unk
     row._total = dailyTotal;
 
     result.push(row);
-    cur.setDate(cur.getDate() + 1);
+    date = addDaysToDateStr(date, 1);
   }
 
   return result;
