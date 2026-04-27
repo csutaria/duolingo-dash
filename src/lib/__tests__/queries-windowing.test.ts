@@ -496,22 +496,28 @@ describe("timezone-aware day bucketing", () => {
 });
 
 /**
- * Sync-side regression: `xp_daily.date` must be formatted in R when
- * persisting Duolingo `xp_summaries` rows. The pre-fix code used
- * `new Date(s.date * 1000).toISOString().split('T')[0]`, which is a
- * UTC date and skews by ±1 day for hosts where R != UTC.
+ * Sync-side regression: `xp_daily.date` must reflect the calendar-day
+ * label Duolingo encoded in `summaries[].date`. Verified empirically
+ * with `xp_summaries?timezone=America/Los_Angeles`, `=UTC`, and
+ * `=Asia/Kolkata` for the same user/window: the `date` field is
+ * byte-for-byte identical across all three. Duolingo encodes the day
+ * label as `Date.UTC(year, month, day)` (midnight UTC of the labeled
+ * day) regardless of the `timezone` query param.
  *
- * This test exercises `formatLocalDate` directly with the same
- * inputs the sync path produces, asserting the IST off-by-one
- * regression is fixed.
+ * The earlier "fix" formatted that instant in **R** under the wrong
+ * hypothesis that `s.date` was a local-day-start. That shifted every
+ * row backward by one day for negative-offset zones (PT, EST, ...)
+ * and was invisible for UTC and positive-offset zones. The current
+ * code reads it as UTC, which recovers the label as-sent.
+ *
+ * This test exercises `formatLocalDate` with realistic Duolingo
+ * inputs, demonstrating that:
+ *   - reading the wire value through PT shifts back by one day
+ *     (this is the bug we're fixing), and
+ *   - reading it as UTC recovers the correct label regardless of R.
  */
-describe("xp_daily.date formatting (IST regression)", () => {
+describe("xp_daily.date formatting (Duolingo wire-encoding)", () => {
   const ORIGINAL_ENV = process.env.DUOLINGO_TZ;
-
-  beforeEach(() => {
-    process.env.DUOLINGO_TZ = "Asia/Kolkata";
-    jest.resetModules();
-  });
 
   afterEach(() => {
     if (ORIGINAL_ENV == null) delete process.env.DUOLINGO_TZ;
@@ -519,22 +525,37 @@ describe("xp_daily.date formatting (IST regression)", () => {
     jest.resetModules();
   });
 
-  it("formats a UTC-second timestamp as the IST calendar day, not UTC", () => {
+  // Duolingo's wire encoding of "the day labeled 2026-04-26":
+  // Date.UTC(2026, 3, 26) / 1000 = 1777161600 (midnight UTC).
+  // Confirmed against live API responses for PT, UTC, and IST.
+  const wireSec = Math.floor(Date.UTC(2026, 3, 26, 0, 0, 0) / 1000);
+
+  it("recovers the calendar-day label as UTC regardless of R", () => {
     const tz = require("../tz") as typeof import("../tz");
-    // Duolingo's xp_summaries returns `date` as the unix-second start
-    // of the local day in the requested tz. For IST, 2026-04-26 starts
-    // at 18:30 UTC on Apr 25.
-    const startOfIstDaySec = Math.floor(Date.UTC(2026, 3, 25, 18, 30, 0) / 1000);
+    expect(tz.formatLocalDate(wireSec * 1000, "UTC")).toBe("2026-04-26");
+    expect(tz.formatLocalDate(wireSec * 1000, "Asia/Kolkata")).toBe("2026-04-26");
+    expect(tz.formatLocalDate(wireSec * 1000, "Europe/London")).toBe("2026-04-26");
+  });
 
-    // Old behavior: new Date(_*1000).toISOString().split('T')[0]
-    //   -> "2026-04-25" (UTC), wrong — this row is "today" in IST.
-    const oldUtcDate = new Date(startOfIstDaySec * 1000)
-      .toISOString()
-      .split("T")[0];
-    expect(oldUtcDate).toBe("2026-04-25");
+  it("documents the off-by-one bug for negative-offset zones (PT)", () => {
+    const tz = require("../tz") as typeof import("../tz");
+    // Reading midnight-UTC through PT yields the *previous* calendar
+    // day. This is the symptom the production code used to exhibit;
+    // production now passes "UTC" to `formatLocalDate`, sidestepping
+    // it entirely.
+    expect(tz.formatLocalDate(wireSec * 1000, "America/Los_Angeles")).toBe("2026-04-25");
+  });
 
-    // New behavior: formatLocalDate(ms, R) -> "2026-04-26" (IST), right.
-    const newDate = tz.formatLocalDate(startOfIstDaySec * 1000, "Asia/Kolkata");
-    expect(newDate).toBe("2026-04-26");
+  it("the production transform is invariant under R", () => {
+    const tz = require("../tz") as typeof import("../tz");
+    // The production code in `saveXpHistory` is:
+    //   formatLocalDate((s.date ?? 0) * 1000, "UTC")
+    // That call MUST be independent of process.env.DUOLINGO_TZ.
+    for (const z of ["America/Los_Angeles", "UTC", "Asia/Kolkata", "Europe/London"]) {
+      process.env.DUOLINGO_TZ = z;
+      jest.resetModules();
+      const fresh = require("../tz") as typeof import("../tz");
+      expect(fresh.formatLocalDate(wireSec * 1000, "UTC")).toBe("2026-04-26");
+    }
   });
 });

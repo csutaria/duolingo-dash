@@ -161,10 +161,11 @@ async function saveXpHistory(client: DuolingoClient): Promise<void> {
   const now = new Date();
   const startDate = new Date(now);
   startDate.setFullYear(startDate.getFullYear() - 1);
-  // Use the resolved server zone (R) so the request range, the
-  // returned bucket boundaries, and our `xp_daily.date` keys all
-  // agree. Duolingo's `xp_summaries` endpoint keys daily buckets in
-  // the timezone we pass it.
+  // We pass R as the `timezone` query param so the request window
+  // bounds are interpreted in the same calendar Duolingo uses to
+  // decide which days to include. The wire encoding of each
+  // `summaries[].date` is independent of this param (see the comment
+  // on the `formatLocalDate(_, "UTC")` call below).
   const tz = getResolvedTimezone();
 
   // Range bounds in R-calendar dates. `toISOString().split('T')[0]`
@@ -179,10 +180,23 @@ async function saveXpHistory(client: DuolingoClient): Promise<void> {
     const mapped = data.summaries
       .filter((s: XpSummary) => s.date != null)
       .map((s: XpSummary) => ({
-        // `s.date` is the unix-second start-of-day in the requested
-        // tz. Format the resulting instant in R so the row keys match
-        // what other code (queries, charts, streak logic) expects.
-        date: formatLocalDate((s.date ?? 0) * 1000, tz),
+        // Duolingo encodes `s.date` as `Date.UTC(year, month, day)`
+        // — i.e. midnight UTC of the calendar-day label. Verified by
+        // hitting `xp_summaries` with `timezone=America/Los_Angeles`,
+        // `=UTC`, and `=Asia/Kolkata` for the same user/window: the
+        // `date` field is byte-for-byte identical across all three.
+        // The `timezone` query param affects which days are *included*
+        // in the response (server-side bucketing on Duolingo's end via
+        // their stored profile zone), not the wire encoding of `date`.
+        //
+        // Read it back as a UTC calendar date to recover the label
+        // Duolingo sent. Reading it through R (e.g. PT) shifts the
+        // label backward by one day for any negative-offset zone,
+        // because midnight-UTC viewed in PT is 17:00 of the prior
+        // local day. (IST and other positive-offset zones happened to
+        // round-trip correctly, which is why the original IST-based
+        // regression test never caught this.)
+        date: formatLocalDate((s.date ?? 0) * 1000, "UTC"),
         gainedXp: s.gainedXp ?? 0,
         frozen: s.frozen ?? false,
         streakExtended: s.streakExtended ?? false,

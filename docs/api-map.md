@@ -38,9 +38,10 @@ JWT (env var)
 *Input:* `userId`, date range (last 1 year), resolved app timezone (**R**, not necessarily host timezone)  
 *Scope:* **account-wide** — all languages combined into one daily total  
 *Returns:* per-day: `gainedXp`, `frozen`, `streakExtended`, `dailyGoalXp`, `numSessions`, `totalSessionTime`  
-*Limitation:* no per-language breakdown
+*Limitation:* no per-language breakdown  
+*Wire encoding (`summaries[].date`):* a **calendar-day label**, encoded as `Date.UTC(year, month, day)` — i.e. midnight UTC of that day, **regardless of the `timezone` query param**. Verified by hitting the endpoint with `=America/Los_Angeles`, `=UTC`, and `=Asia/Kolkata` for the same user/window: the `date` field is byte-for-byte identical across all three. The `timezone` param controls which days are *included* in the response (Duolingo buckets sessions server-side using their stored profile zone), not the wire encoding. We therefore read `s.date * 1000` as a UTC calendar date when persisting `xp_daily.date` (`src/lib/sync.ts` § `saveXpHistory`); reading it through R shifts the label backward by one day for any negative-offset zone.
 
-Deployment note: on UTC hosts, if `DUOLINGO_TZ` is unset and Duolingo has not returned `timezone` yet (so `user_profile.timezone` is empty), `R` may fall through to host `Intl` (often `UTC`); then endpoint ③ buckets by UTC calendar days. Set `DUOLINGO_TZ` explicitly if you need user-local semantics before the first profile sync.
+Deployment note: `R` is still relevant for this endpoint because we pass it as the `timezone` query param to keep the response window aligned with the user's calendar. If `DUOLINGO_TZ` is unset and Duolingo has not yet returned `timezone` (so `user_profile.timezone` is empty) and there is no UI override, `R` falls through to host `Intl`; on a UTC host the request window will use UTC days, which may include or exclude an extra session at the edges. Set `DUOLINGO_TZ` (or use the SyncBar override) for user-local semantics before the first profile sync. Bucketing of stored rows is unaffected — `xp_daily.date` is keyed off the wire label, not `R`.
 
 **④ `GET /vocabulary/overview*`* — vocab for active course  
 *Input:* **none in the URL** — uses active course implicitly from account state  

@@ -212,6 +212,37 @@ function initSchema(db: Database.Database): void {
   migrateSyncLog(db);
   migrateStreakTracking(db);
   migrateUserProfileTimezone(db);
+  migrateXpDailyDateLabels(db);
+}
+
+/**
+ * One-shot migration to drop `xp_daily` rows that were written under
+ * the previous (incorrect) date-formatting code, where
+ * `xp_daily.date` was computed as `formatLocalDate(s.date * 1000, R)`.
+ *
+ * Duolingo's `xp_summaries` endpoint encodes `s.date` as
+ * `Date.UTC(year, month, day)` — i.e. midnight UTC of the calendar
+ * day label. Reading that instant through any negative-offset zone
+ * (PT, EST, etc.) shifts the formatted string back by one day.
+ * Positive-offset zones (IST, UTC+...) and UTC itself round-trip
+ * correctly, so the bug only manifested for users in the Americas.
+ *
+ * Gated on `PRAGMA user_version`. Bump 0 -> 1 wipes the cache once;
+ * the next full sync (`saveXpHistory`) re-fetches a year of summaries
+ * with the corrected `formatLocalDate(_, "UTC")` keying.
+ *
+ * Idempotent: a second startup sees `user_version = 1` and skips.
+ *
+ * Read-only followers never hit this path because `initSchema` is
+ * skipped when `isReadOnlyMode()` is true.
+ *
+ * @internal exported for tests
+ */
+export function migrateXpDailyDateLabels(db: Database.Database): void {
+  const row = db.pragma("user_version", { simple: true }) as number;
+  if (row >= 1) return;
+  db.exec("DELETE FROM xp_daily");
+  db.pragma("user_version = 1");
 }
 
 /** @internal exported for tests */
@@ -290,11 +321,13 @@ export function updateStreakEpochs(
 
 export function backfillImpliedFreeze(currentStreakStart: string): void {
   const db = getDb();
-  // `xp_daily.date` is keyed in R (the resolved server zone), so the
-  // "today" cutoff must also be expressed in R. `DATE('now')` returns
-  // a UTC date and would mis-bucket the boundary day for hosts where
-  // R != UTC. `LOCAL_DATE(datetime('now'))` converts UTC-now to a
-  // calendar date in R.
+  // `xp_daily.date` is keyed off Duolingo's wire calendar-day label
+  // (their profile TZ, encoded midnight-UTC; see api-map.md ③), and
+  // we want to compare against "today in R" for the streak cutoff —
+  // these align when R == profile zone, which is the steady-state
+  // configuration. `DATE('now')` returns a UTC date and would
+  // mis-bucket the boundary day for hosts where R != UTC.
+  // `LOCAL_DATE(datetime('now'))` converts UTC-now to R-calendar.
   db.prepare(`
     UPDATE xp_daily SET implied_freeze = 1
     WHERE date >= ?

@@ -399,8 +399,13 @@ export function getCourseXpHistory(
 export function getCourseXpDailyHistory(days?: number): Array<Record<string, unknown>> {
   const db = getDb();
 
-  // "Today" is the calendar day in the resolved server zone (R), so
-  // bucket boundaries match `xp_daily.date` (also keyed in R).
+  // "Today" is the calendar day in the resolved server zone (R).
+  // `xp_daily.date` is keyed off Duolingo's wire-encoded calendar-day
+  // label (their stored profile TZ, encoded as midnight UTC; see
+  // docs/api-map.md endpoint ③). The two align in steady state, when
+  // R == the user's Duolingo profile zone — which is the priority-3
+  // fallback for R itself, so the alignment holds whenever R isn't
+  // overridden away from the profile zone.
   const todayStr = formatLocalDate(new Date());
 
   // `days = N` means "last N calendar days including today".
