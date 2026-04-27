@@ -15,13 +15,16 @@ Contributor-facing reference for writing tests and planning new coverage. For th
 | File                           | Covers                                                                                                                                   |
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `duolingo.test.ts`             | JWT parsing (`sub` null/string/number), API error handling (401/429/non-JSON), legacy endpoint URL construction (username vs numeric ID) |
-| `db.test.ts`                   | Schema constraints, `NOT NULL` enforcement, upsert behavior, `first_seen` preservation, snapshot accumulation                            |
+| `db.test.ts`                   | Schema constraints, `NOT NULL` enforcement, upsert behavior, `first_seen` preservation, snapshot accumulation, `migrateUserProfileTimezone` idempotency |
 | `queries.test.ts`              | Decay detection (vocab + skills), XP stats aggregation (including freeze rows), course comparison joins, vocab-from-skills fallback      |
+| `queries-windowing.test.ts`    | `getCourseXpHistory` / `getCourseXpDailyHistory` row-count windowing; ideal-anchor / `_pretrack` stacks; **timezone**: `LOCAL_DATE` bucketing vs UTC evening snapshots (PT regression), UTC/IST control cases |
+| `tz.test.ts`                   | Resolved zone **R** priority (`DUOLINGO_TZ` → profile loader → system), cache invalidation, `formatLocalDate` boundaries (PT/IST/UTC), `epochMsForLocalTime` / DST round-trips |
 | `sync.test.ts`                 | Null-safe XP summary mapping, null date filtering, avatar URL protocol handling                                                          |
 | `legacy-language-data.test.ts` | Resolving legacy `language_data` keys (`nb`/`no`, `zh`/`zs`, inner `language`, single-key fallback)                                      |
 | `scripts.test.ts`              | Writing system classification, script skill identification, Latin/non-Latin detection, skill categorization                              |
 | `language-names.test.ts`       | Language name and flag emoji lookup, unknown language fallbacks                                                                          |
-| `polling.test.ts`              | Refresh cooldown enforcement, XP change detection, first-sync trigger                                                                    |
+| `polling.test.ts`              | Refresh cooldown enforcement, XP change detection, first-sync trigger, `advanceSyncState` reducer, `msUntilNextLocalTime` (next 02:00 in **R**), HMR `globalThis` polling bucket |
+| `src/app/api/data/__tests__/route.test.ts` | GET `/api/data`: auth gate, `q=course-xp-history` / `course-xp-daily-history` → correct `queries.ts` arguments and JSON body passthrough (chart consumer contract at HTTP boundary) |
 
 
 Additional invariants exercised across files:
@@ -31,6 +34,7 @@ Additional invariants exercised across files:
 - Snapshot-based decay (compare latest vs previous snapshot per skill/vocab).
 - Protocol-relative avatar URLs (`//…` → `https://…`).
 - Legacy `language_data` key resolution (e.g. `nb`/`no`, `zh`/`zs`) and `XP_STATS_SQL` aggregates (freeze rows vs practice-day counts).
+- SQLite `LOCAL_DATE` UDF + `queries.ts` date walks: snapshot rows bucket by resolved calendar day, not raw UTC `DATE()`.
 
 ## What is intentionally not tested
 
@@ -80,8 +84,8 @@ Logic is non-trivial and directly drives chart coloring correctness. All three f
 - Idempotency across transitions — calling twice with the same new start doesn't duplicate rows (`INSERT OR IGNORE`).
 
 **`backfillImpliedFreeze`:**
-- WHERE clause correctness — sets `implied_freeze = 1` only for rows where `date >= currentStreakStart AND date < DATE('now') AND gained_xp = 0 AND streak_extended = 0 AND frozen = 0`.
-- `date < DATE('now')` boundary — today's row is never touched (handles intra-day sync before practice).
+- WHERE clause correctness — sets `implied_freeze = 1` only for rows where `date >= currentStreakStart AND date < LOCAL_DATE(datetime('now')) AND gained_xp = 0 AND streak_extended = 0 AND frozen = 0` (cutoff is **today** in resolved zone **R**, not UTC `DATE('now')`).
+- `date < LOCAL_DATE(datetime('now'))` boundary — today's row is never touched (handles intra-day sync before practice).
 - Already-set rows — `implied_freeze = 0` filter means already-set rows are not redundantly updated (idempotent).
 - Rows outside the streak window — zero-XP rows before `currentStreakStart` must remain `implied_freeze = 0`.
 
@@ -102,6 +106,13 @@ Core of both features is non-trivial JS computation in `queries.ts`. UI is inten
 - Untracked gap — `_untracked = max(0, xp_daily.gained_xp - sum_of_course_deltas)` per day; verify it is 0 when deltas match or exceed the daily total, and positive when snapshot coverage is incomplete.
 - All-zero day — a day with no snapshots for any course and a non-zero `xp_daily` entry should produce all-zero language deltas and a non-zero `_untracked`.
 
+### Resolved timezone (R) — `tz.ts`, `LOCAL_DATE`, charts, `/api/status`
+
+- [x] Resolver priority, `formatLocalDate`, cache invalidation (`tz.test.ts`).
+- [x] `LOCAL_DATE` snapshot bucketing vs UTC `DATE()` — PT / UTC / IST regressions (`queries-windowing.test.ts`).
+- [x] `migrateUserProfileTimezone` idempotency (`db.test.ts`).
+- [x] `msUntilNextLocalTime` next 02:00 in R (`polling.test.ts` — uses `TZ` / `Intl` for deterministic host zone in those cases).
+
 ### Path-based skill progress (`94e3fab`)
 
 Not in this push. Add when we revisit the path-sectioned sync path.
@@ -113,7 +124,7 @@ Not in this push. Add when we revisit the path-sectioned sync path.
 
 The biggest uncovered surface today. Goal: keep the demo story from silently drifting when the main code evolves.
 
-- `DEMO_MODE` routing — `/api/status` short-circuits to `{ demoMode: true }`; `/api/data` reads from `data/mock.db` without requiring `DUOLINGO_JWT`.
+- `DEMO_MODE` routing — `/api/status` short-circuits with `{ demoMode: true, resolvedTimezone, resolvedTimezoneSource }`; `/api/data` reads from `data/mock.db` without requiring `DUOLINGO_JWT`.
 - `scripts/seed-mock.js` produces a DB whose schema matches the live `initSchema()` — run real migrations against the seeded mock DB and assert no drift.
 - Every table queried by `/api/data` has at least one row in the seeded mock DB. Fail loudly when someone adds a new query and forgets the fixture.
 - `scripts/screenshot.js` smoke test — runs end-to-end against `DEMO_MODE=true` and produces the expected image files. Acceptable to mark as slow / CI-only.
@@ -124,6 +135,10 @@ The biggest uncovered surface today. Goal: keep the demo story from silently dri
 - `SyncBar` React component — `pinned`/`suppressed` state transitions, indicator color for paused / syncing / paused+syncing, progress bar render paths (known + unknown duration). Blocked on adding jsdom + RTL.
 - `/api/status` response shape — snapshot-style assertion that the UI's expected fields are always present.
 - `/api/sync` and `/api/sync-course` handler-level tests.
+
+**Done (chart API wiring):**
+
+- [x] GET `/api/data` — `course-xp-history` / `course-xp-daily-history` query dispatch (`src/app/api/data/__tests__/route.test.ts`).
 
 ## Writing a new test — checklist
 
