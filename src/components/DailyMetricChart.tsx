@@ -45,22 +45,37 @@ export function DailyMetricChart({
   streakEpochs,
 }: DailyMetricChartProps) {
   const epochs = streakEpochs ?? [];
-  if (!data.length) {
-    return <div className="text-zinc-500 text-sm">No data yet</div>;
-  }
 
+  // Spreading `Record<string, unknown>` into an object literal drops the
+  // index signature, so the inferred row type would only carry `_t` and
+  // `_value` after the spread. Stash the original row under `_row` so the
+  // streak/frozen/implied-freeze flags read below stay typed cleanly.
   const withTime = data.map((d) => {
     const t = toNoon(String(d.date));
     const value =
       metric === "time"
         ? Math.round(Number(d.total_session_time || 0) / 60)
         : Number(d.num_sessions || 0);
-    return { ...d, _t: t, _value: value };
+    return { ...d, _t: t, _value: value, _row: d };
   });
 
+  // Domain reaches:
+  //   left  = at most the start-of-day for the first xp_daily row, so the
+  //           full per-day ReferenceArea (centered at noon ±12h) renders
+  //           without being clipped by `domainStart` (which the parent
+  //           anchors at noon for multi-day windows).
+  //   right = at least today's end-of-day, so 1d view always shows today
+  //           on the X axis even before today's xp_daily row exists
+  //           (e.g. before the first sync of the day lands).
+  const todayNoonDate = new Date();
+  todayNoonDate.setHours(12, 0, 0, 0);
+  const todayNoon = todayNoonDate.getTime();
+  const todayEnd = todayNoon + HALF_DAY;
+  const firstAreaStart = withTime.length ? withTime[0]._t - HALF_DAY : todayNoon - HALF_DAY;
+  const lastAreaEnd = withTime.length ? withTime[withTime.length - 1]._t + HALF_DAY : todayEnd;
   const domain: [number, number] = [
-    domainStart ?? withTime[0]._t - HALF_DAY,
-    withTime[withTime.length - 1]._t + HALF_DAY,
+    Math.min(domainStart ?? firstAreaStart, firstAreaStart),
+    Math.max(lastAreaEnd, todayEnd),
   ];
 
   const formatTs = (ts: number) => {
@@ -116,15 +131,15 @@ export function DailyMetricChart({
 
           {/* Per-day streak background */}
           {withTime.map((d) => {
-            const color =
-              d.streak_extended
-                ? FIRE_COLOR
-                : Number(d.frozen) || Number(d.implied_freeze)
-                  ? ICE_COLOR
-                  : GRAY_COLOR;
+            const row = d._row;
+            const color = row.streak_extended
+              ? FIRE_COLOR
+              : Number(row.frozen) || Number(row.implied_freeze)
+                ? ICE_COLOR
+                : GRAY_COLOR;
             return (
               <ReferenceArea
-                key={String(d.date)}
+                key={String(row.date)}
                 x1={d._t - HALF_DAY}
                 x2={d._t + HALF_DAY}
                 fill={color}

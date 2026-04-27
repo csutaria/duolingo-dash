@@ -144,18 +144,18 @@ Invariants enforced in `src/components/StackedXpChart.tsx`:
 
 - The `<Area>` children set is **stable across all views**:
   - one Area per course id in `courseIds` (even courses with all-zero
-    values in the current window),
+  values in the current window),
   - plus the `_prior` and `_pretrack` Areas, always rendered, even when
-    their values are 0 across every row.
+  their values are 0 across every row.
 - The dynamic sort ("smallest delta at the bottom, biggest on top") is
-  preserved by re-sorting the **render order** of the same Areas each
-  render, not by adding/removing them. Equal-valued series fall back
-  to alphabetical-by-id so the inactive zero pile is deterministic.
+preserved by re-sorting the **render order** of the same Areas each
+render, not by adding/removing them. Equal-valued series fall back
+to alphabetical-by-id so the inactive zero pile is deterministic.
 - Tooltip uses a custom `content` component that filters out zero-value
-  rows so inactive courses don't clutter the hover panel.
+rows so inactive courses don't clutter the hover panel.
 - The chart is keyed on `view` in `src/app/history/page.tsx`. This is
-  belt-and-suspenders on top of the stable child set above and makes
-  any residual recharts state get rebuilt on view change.
+belt-and-suspenders on top of the stable child set above and makes
+any residual recharts state get rebuilt on view change.
 
 ### 1-day view: single-row synthesis
 
@@ -169,6 +169,33 @@ the same values, so each course paints as a horizontal band across
 the day. The 1d X domain in `history/page.tsx` is anchored at
 midnight (instead of noon) so the synthesized band fills the full
 visible range.
+
+### Streak Details (`DailyMetricChart`) — domain padding + empty-data
+
+behavior
+
+The streak chart renders one `ReferenceArea` per `xp_daily` row,
+centered at noon and ±12h wide, so each day paints as a full-width
+band. The chart auto-extends its X domain so:
+
+- `domain[0] = min(domainStart, firstDay - 12h)`. The parent's
+`xpDomainStart` anchors at noon for multi-day windows, so without
+this padding the leftmost day's `ReferenceArea` would be clipped
+on its left half (visible as a black gap before the colored area
+begins on, e.g., the 7d view).
+- `domain[1] = max(lastDay + 12h, today end-of-day)`. Today is always
+on the X axis even when no `xp_daily` row exists for today yet
+(e.g. before the first sync of the day lands on the 1d view).
+
+The chart renders its frame/axes even when `data` is empty —
+`history/page.tsx` therefore gates only the Daily Breakdown table on
+`xpDaily.length > 0`, not the chart itself. `streakEpochs` start/end
+ReferenceLines still render in that case.
+
+`getXpDaily(N)` is also keyed in R: the start date is computed via
+`addDaysToDateStr(formatLocalDate(now), -(N-1))`. The pre-fix
+implementation used `date('now', '-N days')` (UTC), which mis-bucketed
+the 1d window for users west of UTC late in their local evening.
 
 ---
 
@@ -195,16 +222,16 @@ visible range.
 - History card sorting aligned with Overview behavior for change modes.
 - Meta cards for non-course series (`_untracked` / `_pretrack`).
 - Stack-order stability across view transitions: stable Area child set,
-  stable tiebreaker, custom tooltip filter, view-keyed remount.
+stable tiebreaker, custom tooltip filter, view-keyed remount.
 - 1-day view renders as horizontal lines via single-row synthesis.
 
 ### Open follow-ups
 
 - Decide whether the `Cumulative XP` line legend remains useful once
-  `Profile total XP` and per-course coverage are visible.
+`Profile total XP` and per-course coverage are visible.
 - Daily stacked bar chart was previously suspected of a similar
-  ordering regression; current observation is no visible issue. Revisit
-  if it resurfaces.
+ordering regression; current observation is no visible issue. Revisit
+if it resurfaces.
 
 ---
 

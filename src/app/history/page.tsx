@@ -303,38 +303,47 @@ export default function HistoryPage() {
         </div>
       )}
 
-      {xpDaily && xpDaily.length > 0 && (
-        <>
-          <div className="border-t border-zinc-800 pt-6">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-lg font-semibold">Streak Details · {rangeLabel}</h3>
-              <div className="flex gap-1">
-                {METRICS.map((m) => (
-                  <button
-                    key={m.value}
-                    type="button"
-                    onClick={() => setMetric(m.value)}
-                    className={`px-2.5 py-1 rounded text-xs transition-colors ${
-                      metric === m.value
-                        ? "bg-zinc-700 text-zinc-100"
-                        : "text-zinc-400 hover:bg-zinc-800"
-                    }`}
-                  >
-                    {m.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-              <DailyMetricChart
-                data={xpDaily}
-                metric={metric}
-                domainStart={xpDomainStart}
-                streakEpochs={streakEpochs as Array<{ streak_start_date: string; streak_end_date: string | null }> | undefined}
-              />
+      {/* Streak Details: always render the chart so the user sees the
+          frame/axes for the selected window even when xp_daily is empty
+          (e.g. 1-day view before today's first sync). DailyMetricChart
+          itself handles the empty-data case. */}
+      {xpDaily && (
+        <div className="border-t border-zinc-800 pt-6">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg font-semibold">Streak Details · {rangeLabel}</h3>
+            <div className="flex gap-1">
+              {METRICS.map((m) => (
+                <button
+                  key={m.value}
+                  type="button"
+                  onClick={() => setMetric(m.value)}
+                  className={`px-2.5 py-1 rounded text-xs transition-colors ${
+                    metric === m.value
+                      ? "bg-zinc-700 text-zinc-100"
+                      : "text-zinc-400 hover:bg-zinc-800"
+                  }`}
+                >
+                  {m.label}
+                </button>
+              ))}
             </div>
           </div>
+          <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+            <DailyMetricChart
+              data={xpDaily}
+              metric={metric}
+              domainStart={xpDomainStart}
+              streakEpochs={streakEpochs as Array<{ streak_start_date: string; streak_end_date: string | null }> | undefined}
+            />
+          </div>
+        </div>
+      )}
 
+      {/* Daily Breakdown table: only renders when there are rows. An
+          empty body would just be a header with no content, which is
+          noisier than just hiding it. */}
+      {xpDaily && xpDaily.length > 0 && (
+        <>
           <section>
             <h3 className="text-lg font-semibold mb-3">Daily Breakdown · {rangeLabel}</h3>
             <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">

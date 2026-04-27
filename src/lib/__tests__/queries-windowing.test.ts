@@ -432,6 +432,48 @@ describe("timezone-aware day bucketing", () => {
     expect(buckets.map((r) => r.d)).toEqual(["2026-04-26", "2026-04-26"]);
   });
 
+  it("PT: getXpDaily(N) anchors window in R, not UTC", () => {
+    // Apr 26 14:00 UTC = Apr 26 07:00 PT. Both UTC and PT agree it's
+    // Apr 26 — but the pre-fix query used `date('now', '-N days')`
+    // which is the UTC equivalent of `today_UTC - N`, not `today_R -
+    // (N-1)`. With matching UTC/PT date, `today_UTC - 7 = Apr 19`,
+    // while the new "N inclusive days" convention `today_PT - 6 =
+    // Apr 20`. Pre-fix returned 8 rows here; post-fix returns 7.
+    const nowMs = Date.UTC(2026, 3, 26, 14, 0, 0);
+    setupAt("America/Los_Angeles", nowMs);
+
+    const dates = [
+      "2026-04-19", "2026-04-20", "2026-04-21", "2026-04-22",
+      "2026-04-23", "2026-04-24", "2026-04-25", "2026-04-26",
+    ];
+    for (const d of dates) {
+      db.prepare("INSERT INTO xp_daily (date, gained_xp) VALUES (?, 10)").run(d);
+    }
+
+    const rows = mod.getXpDaily(7);
+    expect(rows).toHaveLength(7);
+    expect(rows.map((r) => r.date)).toEqual([
+      "2026-04-20", "2026-04-21", "2026-04-22", "2026-04-23",
+      "2026-04-24", "2026-04-25", "2026-04-26",
+    ]);
+  });
+
+  it("IST: getXpDaily(1) returns today-in-IST even when UTC is still yesterday", () => {
+    // Apr 26 19:00 UTC = Apr 27 00:30 IST. `date('now', '-1 days')`
+    // would evaluate to '2026-04-25' (UTC -1 day), so the pre-fix
+    // filter `date >= '2026-04-25'` would include Apr 25-26 IST
+    // rows. Post-fix anchors at IST-today = Apr 27.
+    const nowMs = Date.UTC(2026, 3, 26, 19, 0, 0);
+    setupAt("Asia/Kolkata", nowMs);
+
+    db.prepare(
+      "INSERT INTO xp_daily (date, gained_xp) VALUES ('2026-04-25', 50), ('2026-04-26', 50), ('2026-04-27', 100)",
+    ).run();
+
+    const rows = mod.getXpDaily(1);
+    expect(rows.map((r) => r.date)).toEqual(["2026-04-27"]);
+  });
+
   it("IST: snapshot taken just before midnight UTC stays in 'today' (IST)", () => {
     // 23:30 UTC on 2026-04-25 = 05:00 IST on 2026-04-26.
     // Under R=Asia/Kolkata, that snapshot must bucket to Apr 26.

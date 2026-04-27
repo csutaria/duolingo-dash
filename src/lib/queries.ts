@@ -47,11 +47,19 @@ export function getCourseHistory(courseId: string) {
 export function getXpDaily(days?: number) {
   const db = getDb();
   if (days) {
+    // `date('now', '-N days')` evaluates in UTC, which mis-buckets the
+    // window for east/west-of-UTC users (notably PT: late-evening is
+    // already the next day in UTC, so the filter drops "today"). Match
+    // the rest of the queries: bind the start date computed in R via
+    // `formatLocalDate` + pure-string arithmetic. `xp_daily.date` is
+    // also keyed in R (see `saveXpHistory` in `sync.ts`).
+    const todayStr = formatLocalDate(new Date());
+    const startStr = addDaysToDateStr(todayStr, -(days - 1));
     return db.prepare(`
       SELECT * FROM xp_daily
-      WHERE date >= date('now', '-' || ? || ' days')
+      WHERE date >= ?
       ORDER BY date ASC
-    `).all(days) as Array<Record<string, unknown>>;
+    `).all(startStr) as Array<Record<string, unknown>>;
   }
   return db.prepare("SELECT * FROM xp_daily ORDER BY date ASC").all() as Array<Record<string, unknown>>;
 }

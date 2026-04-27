@@ -17,7 +17,7 @@ Contributor-facing reference for writing tests and planning new coverage. For th
 | `duolingo.test.ts`             | JWT parsing (`sub` null/string/number), API error handling (401/429/non-JSON), legacy endpoint URL construction (username vs numeric ID) |
 | `db.test.ts`                   | Schema constraints, `NOT NULL` enforcement, upsert behavior, `first_seen` preservation, snapshot accumulation, `migrateUserProfileTimezone` idempotency |
 | `queries.test.ts`              | Decay detection (vocab + skills), XP stats aggregation (including freeze rows), course comparison joins, vocab-from-skills fallback      |
-| `queries-windowing.test.ts`    | `getCourseXpHistory` / `getCourseXpDailyHistory` row-count windowing; ideal-anchor / `_pretrack` stacks; **timezone**: `LOCAL_DATE` bucketing vs UTC evening snapshots (PT regression), UTC/IST control cases |
+| `queries-windowing.test.ts`    | `getCourseXpHistory` / `getCourseXpDailyHistory` row-count windowing; ideal-anchor / `_pretrack` stacks; **timezone**: `LOCAL_DATE` bucketing vs UTC evening snapshots (PT regression), `getXpDaily(N)` window anchored in R (PT + IST regressions), UTC/IST control cases |
 | `tz.test.ts`                   | Resolved zone **R** priority (`DUOLINGO_TZ` → profile loader → system), cache invalidation, `formatLocalDate` boundaries (PT/IST/UTC), `epochMsForLocalTime` / DST round-trips |
 | `sync.test.ts`                 | Null-safe XP summary mapping, null date filtering, avatar URL protocol handling                                                          |
 | `legacy-language-data.test.ts` | Resolving legacy `language_data` keys (`nb`/`no`, `zh`/`zs`, inner `language`, single-key fallback)                                      |
