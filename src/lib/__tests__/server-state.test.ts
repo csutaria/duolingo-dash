@@ -62,6 +62,7 @@ function loadServerState(): ServerStateModule {
 }
 
 const originalJwt = process.env.DUOLINGO_JWT;
+const originalReadOnly = process.env.DUOLINGO_READ_ONLY;
 
 beforeEach(() => {
   jest.resetModules();
@@ -75,6 +76,11 @@ afterEach(() => {
     delete process.env.DUOLINGO_JWT;
   } else {
     process.env.DUOLINGO_JWT = originalJwt;
+  }
+  if (originalReadOnly === undefined) {
+    delete process.env.DUOLINGO_READ_ONLY;
+  } else {
+    process.env.DUOLINGO_READ_ONLY = originalReadOnly;
   }
   jest.resetModules();
   jest.dontMock("../polling");
@@ -229,6 +235,40 @@ describe("getClientOrNull", () => {
     const mod = loadServerState();
 
     expect(mod.getClientOrNull()).toBe(duolingo.client);
+  });
+});
+
+describe("read-only mode", () => {
+  it("ensureClient throws even with a JWT set, and never starts polling or initClient", () => {
+    process.env.DUOLINGO_READ_ONLY = "1";
+    process.env.DUOLINGO_JWT = "test-jwt"; // explicitly proving the read-only check wins
+    const { polling, duolingo } = setupMocks();
+    const mod = loadServerState();
+
+    expect(() => mod.ensureClient()).toThrow(/read-only/i);
+    expect(duolingo.initClient).not.toHaveBeenCalled();
+    expect(polling.startPolling).not.toHaveBeenCalled();
+  });
+
+  it("ensureClient throws read-only error even without a JWT (read-only check runs first)", () => {
+    process.env.DUOLINGO_READ_ONLY = "1";
+    delete process.env.DUOLINGO_JWT;
+    const { polling, duolingo } = setupMocks();
+    const mod = loadServerState();
+
+    expect(() => mod.ensureClient()).toThrow(/read-only/i);
+    expect(duolingo.initClient).not.toHaveBeenCalled();
+    expect(polling.startPolling).not.toHaveBeenCalled();
+  });
+
+  it("getClientOrNull returns null without attempting to construct a client", () => {
+    process.env.DUOLINGO_READ_ONLY = "1";
+    process.env.DUOLINGO_JWT = "test-jwt";
+    const { duolingo } = setupMocks();
+    const mod = loadServerState();
+
+    expect(mod.getClientOrNull()).toBeNull();
+    expect(duolingo.initClient).not.toHaveBeenCalled();
   });
 });
 

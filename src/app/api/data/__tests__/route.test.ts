@@ -39,7 +39,17 @@ afterEach(() => {
 });
 
 describe("GET /api/data", () => {
+  const originalReadOnly = process.env.DUOLINGO_READ_ONLY;
+  afterEach(() => {
+    if (originalReadOnly === undefined) {
+      delete process.env.DUOLINGO_READ_ONLY;
+    } else {
+      process.env.DUOLINGO_READ_ONLY = originalReadOnly;
+    }
+  });
+
   it("returns 401 when not in DEMO_MODE and JWT client is absent", async () => {
+    delete process.env.DUOLINGO_READ_ONLY;
     jest.doMock("@/lib/server-state", () => ({
       getClientOrNull: jest.fn(() => null),
     }));
@@ -51,6 +61,27 @@ describe("GET /api/data", () => {
     );
 
     expect(res.status).toBe(401);
+  });
+
+  it("bypasses the auth gate in read-only mode (serves DB-backed data without a client)", async () => {
+    process.env.DUOLINGO_READ_ONLY = "1";
+    const mocks = mockQueries();
+    mocks.getCourseXpHistory.mockReturnValue([
+      { date: "2026-04-26", _prior: 0, _pretrack: 0, _total: 100, X: 100 },
+    ]);
+    const getClientOrNull = jest.fn(() => null);
+    jest.doMock("@/lib/server-state", () => ({ getClientOrNull }));
+    jest.doMock("@/lib/queries", () => mocks);
+
+    const { GET } = require("../route") as typeof import("../route");
+    const res = await GET(
+      new NextRequest("http://localhost/api/data?q=course-xp-history&days=7"),
+    );
+
+    expect(res.status).toBe(200);
+    // Read-only path doesn't even consult getClientOrNull — no JWT involved.
+    expect(getClientOrNull).not.toHaveBeenCalled();
+    expect(mocks.getCourseXpHistory).toHaveBeenCalledWith(7, "delta");
   });
 
   it("course-xp-history: forwards days=N as delta stack", async () => {

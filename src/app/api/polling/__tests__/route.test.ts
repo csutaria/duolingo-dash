@@ -66,6 +66,8 @@ function postRequest(body: unknown): Request {
   });
 }
 
+const originalReadOnly = process.env.DUOLINGO_READ_ONLY;
+
 beforeEach(() => {
   jest.resetModules();
   jest.dontMock("@/lib/polling");
@@ -73,6 +75,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (originalReadOnly === undefined) {
+    delete process.env.DUOLINGO_READ_ONLY;
+  } else {
+    process.env.DUOLINGO_READ_ONLY = originalReadOnly;
+  }
   jest.resetModules();
   jest.dontMock("@/lib/polling");
   jest.dontMock("@/lib/server-state");
@@ -152,6 +159,23 @@ describe("POST /api/polling", () => {
 
       const res = await POST(postRequest("not valid json"));
       expect(res.status).toBe(400);
+      expect(server.pauseUserPolling).not.toHaveBeenCalled();
+      expect(server.resumeUserPolling).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("read-only mode", () => {
+    it("returns 503 { error: 'read-only' } and never touches pause/resume/ensureClient", async () => {
+      process.env.DUOLINGO_READ_ONLY = "1";
+      const { server } = setupMocks();
+      const { POST } = loadRoute();
+
+      const res = await POST(postRequest({ action: "resume" }));
+      const body = await res.json();
+
+      expect(res.status).toBe(503);
+      expect(body).toEqual({ error: "read-only" });
+      expect(server.ensureClient).not.toHaveBeenCalled();
       expect(server.pauseUserPolling).not.toHaveBeenCalled();
       expect(server.resumeUserPolling).not.toHaveBeenCalled();
     });

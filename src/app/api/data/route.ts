@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getClientOrNull } from "@/lib/server-state";
+import { isReadOnlyMode } from "@/lib/read-only";
 import {
   getProfile,
   getCourseLatest,
@@ -22,7 +23,11 @@ import {
 const DEMO_MODE = process.env.DEMO_MODE === "true";
 
 export async function GET(request: NextRequest) {
-  if (!DEMO_MODE) {
+  // DEMO_MODE and read-only mode both serve charts/tables out of the
+  // local SQLite without a Duolingo client. Read-only assumes a writer
+  // process has already populated the DB; the auth gate protects only
+  // the live-writer configuration.
+  if (!DEMO_MODE && !isReadOnlyMode()) {
     const client = getClientOrNull();
     if (!client) {
       return NextResponse.json(

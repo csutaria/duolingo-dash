@@ -85,6 +85,31 @@ Deployment checklist (single-user/self-host):
 3. Verify at runtime that `msUntilNextNightlySync` (from `/api/status`) counts down to the next 02:00 in that zone.
 4. Keep host OS timezone independent (UTC is fine). Scheduling uses **R**, not host-local midnight math.
 
+## Read-only mode (`DUOLINGO_READ_ONLY=1`)
+
+A second instance can be run as a **display-only** process pointing at the same SQLite file. Use this to test/preview the UI on another machine without contending with the writer for the Duolingo API or the SQLite write lock.
+
+Activated by env: `DUOLINGO_READ_ONLY=1` (also `true`/`yes`, case-insensitive). Surfaced via `isReadOnlyMode()` in `src/lib/read-only.ts`. Side-effects:
+
+| Subsystem | Read-only behavior |
+| --- | --- |
+| `getDb()` (`src/lib/db.ts`) | Opens with `new Database(DB_PATH, { readonly: true, fileMustExist: true })`. Skips `initSchema` and migrations (writer already ran them). Still registers the `LOCAL_DATE` UDF — that's per-connection, not a write. |
+| `ensureClient()` (`src/lib/server-state.ts`) | Throws `"read-only mode: Duolingo client is disabled"` immediately, before `DUOLINGO_JWT` is consulted and before `startPolling` runs. No timers are armed. |
+| `getClientOrNull()` | Returns `null` without attempting to construct a client — `/api/status` and `/api/data` use this path. |
+| `POST /api/sync` | Returns `503 { "error": "read-only" }`. |
+| `POST /api/sync-course` | Returns `503 { "error": "read-only" }`. |
+| `POST /api/polling` | Returns `503 { "error": "read-only" }`. |
+| `GET /api/status` | Returns `{ readOnly: true, authenticated: false, polling: false, dbStatus, resolvedTimezone, resolvedTimezoneSource }` (other timer fields are nulled — they don't apply). |
+| `SyncBar` UI | Renders a blue **"Read-only"** pill in place of Refresh / Sync All. The status panel shows "Display-only instance. Writes are disabled." instead of the pause toggle. The `Last sync` row + Timezone row still render from `dbStatus`. |
+
+Caveats and follow-ups (these are why this is a "display" mode, not "follower" mode):
+
+- The resolver cache in `src/lib/tz.ts` is per-process. If the writer learns a new Duolingo profile timezone, the read-only process won't see it until restart unless it re-resolves on demand. Acceptable for now; tracked in `docs/multi-server.md` (planned C5).
+- `dbStatus` reflects the writer's last sync — the read-only process never updates `sync_log`. The UI should not interpret "no recent sync" as a problem on a read-only instance.
+- The DB file must be reachable by both processes (same host, shared filesystem, or copy). SQLite WAL is concurrent-read-safe with a single writer, which is the configuration we expect here.
+
+See `README.md` § "Running a display-only second instance" for the user-facing instructions.
+
 ## Polling pipeline
 
 `startPolling(client)` arms three independent schedules on the shared bucket:
@@ -168,10 +193,10 @@ Progress is derived client-side as `min(1, elapsed / expectedDurationMs[type])` 
 
 | Route              | Method                                              | Purpose                                                                                                                                                                                             |
 | ------------------ | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/api/status`      | `GET`                                               | Auth state, polling on/off, `paused`, `currentlyRunning`, `currentSync`, `expectedDurationMs.{single,cycle}`, last sync result, DB status, `msUntilNextXpCheck`, `msUntilNextNightlySync`, `syncMode` (`"baseline"`/`"fast"`), `fastIdleTicks`, `fastIdleTicksRequired`, **`resolvedTimezone`** (IANA **R**), **`resolvedTimezoneSource`** (`env` / `profile` / `system`). Primary source for UI polling state. |
-| `/api/polling`     | `POST { action: "pause" | "resume" }`               | Toggle `userPaused`. Returns `{ paused, polling }`. 400 on invalid action.                                                                                                                          |
-| `/api/sync`        | `POST { force?: boolean, cycleAll?: boolean }`      | `force=false` (default): `manualRefresh` (respects cooldown + `isRunning`). `force=true`: direct `fullSync(client, cycleAll)`.                                                                      |
-| `/api/sync-course` | `POST { courseId, learningLanguage, fromLanguage }` | `syncCourseDetails` for a single course (may cycle via endpoint ⑥ if not active).                                                                                                                   |
+| `/api/status`      | `GET`                                               | Auth state, polling on/off, `paused`, `currentlyRunning`, `currentSync`, `expectedDurationMs.{single,cycle}`, last sync result, DB status, `msUntilNextXpCheck`, `msUntilNextNightlySync`, `syncMode` (`"baseline"`/`"fast"`), `fastIdleTicks`, `fastIdleTicksRequired`, **`resolvedTimezone`** (IANA **R**), **`resolvedTimezoneSource`** (`env` / `profile` / `system`), **`readOnly`** (`true` when `DUOLINGO_READ_ONLY=1`). Primary source for UI polling state. |
+| `/api/polling`     | `POST { action: "pause" | "resume" }`               | Toggle `userPaused`. Returns `{ paused, polling }`. 400 on invalid action. **503 `{ error: "read-only" }`** in read-only mode.                                                                       |
+| `/api/sync`        | `POST { force?: boolean, cycleAll?: boolean }`      | `force=false` (default): `manualRefresh` (respects cooldown + `isRunning`). `force=true`: direct `fullSync(client, cycleAll)`. **503 `{ error: "read-only" }`** in read-only mode.                  |
+| `/api/sync-course` | `POST { courseId, learningLanguage, fromLanguage }` | `syncCourseDetails` for a single course (may cycle via endpoint ⑥ if not active). **503 `{ error: "read-only" }`** in read-only mode.                                                                |
 | `/api/data`        | `GET`                                               | Read-only queries for the dashboard UI. Supports `DEMO_MODE`.                                                                                                                                       |
 | `/api/debug`       | `GET`                                               | Dev-only (`NODE_ENV === "development"`). Returns raw user + legacy-language resolution per course.                                                                                                  |
 

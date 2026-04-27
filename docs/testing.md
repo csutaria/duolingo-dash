@@ -24,7 +24,12 @@ Contributor-facing reference for writing tests and planning new coverage. For th
 | `scripts.test.ts`              | Writing system classification, script skill identification, Latin/non-Latin detection, skill categorization                              |
 | `language-names.test.ts`       | Language name and flag emoji lookup, unknown language fallbacks                                                                          |
 | `polling.test.ts`              | Refresh cooldown enforcement, XP change detection, first-sync trigger, `advanceSyncState` reducer, `msUntilNextLocalTime` (next 02:00 in **R**), HMR `globalThis` polling bucket |
+| `read-only.test.ts`            | `isReadOnlyMode()` truth table for `DUOLINGO_READ_ONLY` (1/true/yes → true; 0/false/no/empty/random → false), case insensitive |
+| `server-state.test.ts` (read-only block) | `ensureClient` throws read-only error before checking JWT and never starts polling; `getClientOrNull` returns null without constructing a client |
 | `src/app/api/data/__tests__/route.test.ts` | GET `/api/data`: auth gate, `q=course-xp-history` / `course-xp-daily-history` → correct `queries.ts` arguments and JSON body passthrough (chart consumer contract at HTTP boundary) |
+| `src/app/api/sync/__tests__/route.test.ts` | POST `/api/sync`: `DUOLINGO_READ_ONLY` (`1`/`true`/`yes`) → 503 `{ error: "read-only" }` and never invokes `ensureClient`/`fullSync`/`manualRefresh`; normal mode dispatches `manualRefresh` vs `fullSync(_, cycleAll)` correctly |
+| `src/app/api/sync-course/__tests__/route.test.ts` | POST `/api/sync-course`: 503 in read-only without touching the writer path; 400 on missing required params |
+| `src/app/api/polling/__tests__/route.test.ts` (read-only block) | POST `/api/polling`: 503 `{ error: "read-only" }` in read-only mode without touching pause/resume/ensureClient |
 
 
 Additional invariants exercised across files:
@@ -132,13 +137,13 @@ The biggest uncovered surface today. Goal: keep the demo story from silently dri
 
 ### Deferred
 
-- `SyncBar` React component — `pinned`/`suppressed` state transitions, indicator color for paused / syncing / paused+syncing, progress bar render paths (known + unknown duration). Blocked on adding jsdom + RTL.
+- `SyncBar` React component — `pinned`/`suppressed` state transitions, indicator color for paused / syncing / paused+syncing, progress bar render paths (known + unknown duration), Read-only badge / hidden write-button branches. Blocked on adding jsdom + RTL.
 - `/api/status` response shape — snapshot-style assertion that the UI's expected fields are always present.
-- `/api/sync` and `/api/sync-course` handler-level tests.
 
-**Done (chart API wiring):**
+**Done (chart API wiring + write-route guards):**
 
 - [x] GET `/api/data` — `course-xp-history` / `course-xp-daily-history` query dispatch (`src/app/api/data/__tests__/route.test.ts`).
+- [x] POST `/api/sync` and `/api/sync-course` handler-level tests, with read-only 503 guards.
 
 ## Writing a new test — checklist
 

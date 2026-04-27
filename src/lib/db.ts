@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
 import { formatLocalDate, invalidateResolvedTimezone, setProfileTimezoneLoader } from "./tz";
+import { isReadOnlyMode } from "./read-only";
 
 const DEMO_MODE = process.env.DEMO_MODE === "true";
 const DB_PATH = path.join(process.cwd(), "data", DEMO_MODE ? "mock.db" : "duolingo.db");
@@ -10,11 +11,22 @@ let db: Database.Database | null = null;
 
 export function getDb(): Database.Database {
   if (db) return db;
-  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-  db = new Database(DB_PATH);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-  initSchema(db);
+  const readOnly = isReadOnlyMode();
+  if (readOnly) {
+    // Read-only instance: assume the writer process has already created
+    // the file and run migrations. Opening with `fileMustExist: true`
+    // surfaces a clear error if pointed at a missing DB instead of
+    // silently creating an empty one. We still need to register the
+    // `LOCAL_DATE` UDF on this connection (UDF registration is
+    // per-connection, not a write) so chart queries work.
+    db = new Database(DB_PATH, { readonly: true, fileMustExist: true });
+  } else {
+    fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+    db = new Database(DB_PATH);
+    db.pragma("journal_mode = WAL");
+    db.pragma("foreign_keys = ON");
+    initSchema(db);
+  }
   registerLocalDateFn(db);
   setProfileTimezoneLoader(getStoredProfileTimezone);
   return db;

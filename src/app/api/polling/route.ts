@@ -6,8 +6,12 @@ import {
   resumeUserPolling,
 } from "@/lib/server-state";
 import { isPolling } from "@/lib/polling";
+import { isReadOnlyMode } from "@/lib/read-only";
 
 export async function POST(request: Request) {
+  if (isReadOnlyMode()) {
+    return NextResponse.json({ error: "read-only" }, { status: 503 });
+  }
   try {
     const body = await request.json().catch(() => ({}));
     const action = body.action;

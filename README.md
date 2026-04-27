@@ -59,6 +59,23 @@ Click the polling indicator in the header to open a small panel:
 - **Pause** stops all background sync (baseline 30-min XP checks, the 2-min quiet watcher, and the nightly). Manual **Refresh** and **Sync All Languages** still work while paused. Pause resets on server restart — if you want it permanently off, pause again after each restart.
 - While a sync is running, the panel shows an approximate progress bar. It's based on the median of your recent sync durations, so the first few syncs (before any history) show an indeterminate bar.
 
+### Running a display-only second instance (read-only mode)
+
+To preview the UI on a second machine (or a remote server) without contending with your local writer for the Duolingo API, point a second process at the same SQLite file with `DUOLINGO_READ_ONLY=1`:
+
+```bash
+DUOLINGO_READ_ONLY=1 npm run dev
+```
+
+In this mode the process:
+
+- opens `data/duolingo.db` with `readonly: true` (writes throw at the SQLite layer),
+- skips the `DUOLINGO_JWT` requirement, the polling timers, and the nightly sync,
+- returns `503 { "error": "read-only" }` from `POST /api/sync`, `POST /api/sync-course`, and `POST /api/polling`,
+- displays a **Read-only** badge in the header and hides the Refresh / Sync All buttons.
+
+Charts and history pages render exactly as on the writer instance. The DB file should be on shared storage or copied from the writer; SQLite WAL is concurrent-read-safe with one writer.
+
 ## Testing
 
 ```bash

@@ -1,12 +1,22 @@
 import { DuolingoClient, initClient } from "./duolingo";
 import { startPolling, stopPolling, isPolling } from "./polling";
 import { getPollingState } from "./polling-state";
+import { isReadOnlyMode } from "./read-only";
 
 // `client` and `userPaused` live on the shared globalThis bucket in
 // polling-state.ts so Next.js HMR can't orphan timers or spawn a second
 // singleton. See the comment in polling-state.ts.
 
 export function ensureClient(): DuolingoClient {
+  if (isReadOnlyMode()) {
+    // Read-only instance never instantiates a Duolingo client: no JWT
+    // requirement, no polling, no writes. Mutating routes guard on
+    // `isReadOnlyMode()` and return 503 before reaching this path;
+    // status / data routes use `getClientOrNull()` which returns null
+    // here without throwing.
+    throw new Error("read-only mode: Duolingo client is disabled");
+  }
+
   const state = getPollingState();
   if (state.client) return state.client;
 
@@ -25,6 +35,7 @@ export function ensureClient(): DuolingoClient {
 }
 
 export function getClientOrNull(): DuolingoClient | null {
+  if (isReadOnlyMode()) return null;
   const state = getPollingState();
   if (state.client) return state.client;
   try {

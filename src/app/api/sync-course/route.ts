@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 import { ensureClient } from "@/lib/server-state";
 import { syncCourseDetails } from "@/lib/sync";
+import { isReadOnlyMode } from "@/lib/read-only";
 
 export async function POST(request: Request) {
+  if (isReadOnlyMode()) {
+    return NextResponse.json({ error: "read-only" }, { status: 503 });
+  }
   try {
     const client = ensureClient();
     const body = await request.json();

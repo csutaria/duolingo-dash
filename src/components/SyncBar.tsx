@@ -71,6 +71,7 @@ function SyncStatusPanel({
   paused,
   currentlyRunning,
   authenticated,
+  readOnly,
   resolvedTimezone,
   resolvedTimezoneSource,
   msUntilNextXpCheck,
@@ -91,6 +92,7 @@ function SyncStatusPanel({
   paused: boolean;
   currentlyRunning: boolean;
   authenticated: boolean;
+  readOnly: boolean;
   resolvedTimezone: string | null;
   resolvedTimezoneSource: string | null;
   msUntilNextXpCheck: number | null;
@@ -110,17 +112,19 @@ function SyncStatusPanel({
       ? "Watching — checking every 2m"
       : "Idle — XP check every 30m";
 
-  const stateLabel = !authenticated
-    ? { text: "Not connected", color: "text-red-400" }
-    : paused && currentlyRunning
-      ? { text: "Paused — syncing now…", color: "text-yellow-400" }
-      : paused
-        ? { text: "Paused", color: "text-red-400" }
-        : !pollingOn
-          ? { text: "Polling off", color: "text-red-400" }
-          : currentlyRunning
-            ? { text: "Syncing now…", color: "text-yellow-400" }
-            : { text: idleText, color: "text-green-400" };
+  const stateLabel = readOnly
+    ? { text: "Read-only — display instance", color: "text-blue-300" }
+    : !authenticated
+      ? { text: "Not connected", color: "text-red-400" }
+      : paused && currentlyRunning
+        ? { text: "Paused — syncing now…", color: "text-yellow-400" }
+        : paused
+          ? { text: "Paused", color: "text-red-400" }
+          : !pollingOn
+            ? { text: "Polling off", color: "text-red-400" }
+            : currentlyRunning
+              ? { text: "Syncing now…", color: "text-yellow-400" }
+              : { text: idleText, color: "text-green-400" };
 
   const xpCheckMin = msUntilNextXpCheck != null ? ceilMin(msUntilNextXpCheck) : null;
   const nightlyMin = msUntilNextNightlySync != null ? ceilMin(msUntilNextNightlySync) : null;
@@ -166,38 +170,42 @@ function SyncStatusPanel({
       </div>
 
       <dl className="mt-2 space-y-1.5 text-[11px] leading-snug">
-        <div className="flex gap-2">
-          <dt className="shrink-0 text-zinc-500">Next XP check</dt>
-          <dd className="tabular-nums text-zinc-300">
-            {paused
-              ? "— (paused)"
-              : xpCheckMin != null && xpCheckMin > 0
-                ? `~${xpCheckMin}m`
-                : xpCheckMin === 0
-                  ? "imminent"
-                  : "— (pending first check)"}
-          </dd>
-        </div>
-        {syncMode === "fast" && quietRemainingMin != null && (
-          <div className="flex gap-2">
-            <dt className="shrink-0 text-zinc-500">Full sync if quiet</dt>
-            <dd className="tabular-nums text-zinc-300">
-              {quietRemainingMin > 0 ? `in ~${quietRemainingMin}m` : "imminent"}
-            </dd>
-          </div>
+        {!readOnly && (
+          <>
+            <div className="flex gap-2">
+              <dt className="shrink-0 text-zinc-500">Next XP check</dt>
+              <dd className="tabular-nums text-zinc-300">
+                {paused
+                  ? "— (paused)"
+                  : xpCheckMin != null && xpCheckMin > 0
+                    ? `~${xpCheckMin}m`
+                    : xpCheckMin === 0
+                      ? "imminent"
+                      : "— (pending first check)"}
+              </dd>
+            </div>
+            {syncMode === "fast" && quietRemainingMin != null && (
+              <div className="flex gap-2">
+                <dt className="shrink-0 text-zinc-500">Full sync if quiet</dt>
+                <dd className="tabular-nums text-zinc-300">
+                  {quietRemainingMin > 0 ? `in ~${quietRemainingMin}m` : "imminent"}
+                </dd>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <dt className="shrink-0 text-zinc-500">Next nightly sync</dt>
+              <dd className="tabular-nums text-zinc-300">
+                {paused
+                  ? "— (paused)"
+                  : nightlyMin != null && nightlyMin > 0
+                    ? `~${nightlyMin}m`
+                    : nightlyMin === 0
+                      ? "imminent"
+                      : "— (scheduling)"}
+              </dd>
+            </div>
+          </>
         )}
-        <div className="flex gap-2">
-          <dt className="shrink-0 text-zinc-500">Next nightly sync</dt>
-          <dd className="tabular-nums text-zinc-300">
-            {paused
-              ? "— (paused)"
-              : nightlyMin != null && nightlyMin > 0
-                ? `~${nightlyMin}m`
-                : nightlyMin === 0
-                  ? "imminent"
-                  : "— (scheduling)"}
-          </dd>
-        </div>
         {resolvedTimezone != null && resolvedTimezoneSource != null && (
           <div className="flex gap-2">
             <dt className="shrink-0 text-zinc-500">Timezone</dt>
@@ -212,30 +220,40 @@ function SyncStatusPanel({
         )}
       </dl>
 
-      {authenticated && (
+      {readOnly ? (
         <div className="mt-2.5 border-t border-zinc-800 pt-2">
-          <button
-            type="button"
-            onClick={onTogglePaused}
-            disabled={pauseBusy}
-            className={`w-full whitespace-nowrap rounded px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50 ${
-              paused
-                ? "bg-green-700/60 text-green-100 hover:bg-green-600/70"
-                : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-            }`}
-          >
-            {pauseBusy
-              ? paused
-                ? "Resuming…"
-                : "Pausing…"
-              : paused
-                ? "Resume polling"
-                : "Pause polling"}
-          </button>
-          <p className="mt-1.5 text-[10px] leading-snug text-zinc-500">
-            Pausing stops baseline XP checks, quiet-detector fast polls, and the nightly sync. Manual Refresh and Sync All still work. Resets on server restart.
+          <p className="text-[10px] leading-snug text-zinc-500">
+            Display-only instance (`DUOLINGO_READ_ONLY=1`). Writes are
+            disabled — no JWT, no polling, no nightly sync. The DB is
+            opened read-only and shared with the writer process.
           </p>
         </div>
+      ) : (
+        authenticated && (
+          <div className="mt-2.5 border-t border-zinc-800 pt-2">
+            <button
+              type="button"
+              onClick={onTogglePaused}
+              disabled={pauseBusy}
+              className={`w-full whitespace-nowrap rounded px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50 ${
+                paused
+                  ? "bg-green-700/60 text-green-100 hover:bg-green-600/70"
+                  : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+              }`}
+            >
+              {pauseBusy
+                ? paused
+                  ? "Resuming…"
+                  : "Pausing…"
+                : paused
+                  ? "Resume polling"
+                  : "Pause polling"}
+            </button>
+            <p className="mt-1.5 text-[10px] leading-snug text-zinc-500">
+              Pausing stops baseline XP checks, quiet-detector fast polls, and the nightly sync. Manual Refresh and Sync All still work. Resets on server restart.
+            </p>
+          </div>
+        )
       )}
     </div>
   );
@@ -304,6 +322,7 @@ export function SyncBar() {
   const hasError = lastResult?.error;
 
   const demoMode = status?.demoMode === true;
+  const readOnly = status?.readOnly === true;
   const authenticated = status?.authenticated === true;
   const pollingOn = status?.polling === true;
   const currentlyRunning = status?.currentlyRunning === true || syncing;
@@ -330,8 +349,9 @@ export function SyncBar() {
       : expectedDurationMs?.single ?? null
     : null;
 
-  const indicatorColor =
-    !status || !authenticated
+  const indicatorColor = readOnly
+    ? "text-blue-300"
+    : !status || !authenticated
       ? "text-red-500"
       : currentlyRunning
         ? "text-yellow-400"
@@ -346,21 +366,23 @@ export function SyncBar() {
 
   const indicatorLabel = !status
     ? "Initializing…"
-    : !authenticated
-      ? "Not connected"
-      : paused && currentlyRunning
-        ? "Paused · Syncing…"
-        : paused
-          ? "Paused"
-          : !pollingOn
-            ? "Polling off"
-            : currentlyRunning
-              ? "Syncing…"
-              : syncMode === "fast"
-                ? "Watching XP"
-                : nextCheckMin != null && nextCheckMin > 0
-                  ? `Check in ~${nextCheckMin}m`
-                  : "Polling";
+    : readOnly
+      ? "Read-only"
+      : !authenticated
+        ? "Not connected"
+        : paused && currentlyRunning
+          ? "Paused · Syncing…"
+          : paused
+            ? "Paused"
+            : !pollingOn
+              ? "Polling off"
+              : currentlyRunning
+                ? "Syncing…"
+                : syncMode === "fast"
+                  ? "Watching XP"
+                  : nextCheckMin != null && nextCheckMin > 0
+                    ? `Check in ~${nextCheckMin}m`
+                    : "Polling";
 
   if (demoMode) {
     return (
@@ -412,6 +434,7 @@ export function SyncBar() {
           paused={paused}
           currentlyRunning={currentlyRunning}
           authenticated={authenticated}
+          readOnly={readOnly}
           resolvedTimezone={resolvedTimezone}
           resolvedTimezoneSource={resolvedTimezoneSource}
           msUntilNextXpCheck={msUntilNextXpCheck}
@@ -428,32 +451,41 @@ export function SyncBar() {
         />
       </div>
 
-      <div className="flex shrink-0 flex-nowrap items-center gap-2">
-        <button
-          type="button"
-          onClick={() => sync(true, false)}
-          disabled={syncing}
-          className="whitespace-nowrap px-3 py-1 rounded bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 text-zinc-200 transition-colors"
+      {readOnly ? (
+        <span
+          className="whitespace-nowrap rounded border border-blue-500/40 bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-200"
+          title="Display-only instance. Writes are disabled."
         >
-          {syncing ? "Syncing…" : "Refresh"}
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            if (
-              confirm(
-                "This will temporarily switch your active Duolingo language to sync all courses. Only use when you're not actively using Duolingo.",
-              )
-            ) {
-              sync(true, true);
-            }
-          }}
-          disabled={syncing}
-          className="whitespace-nowrap px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-400 hover:text-zinc-200 transition-colors"
-        >
-          {syncing ? "Syncing…" : "Sync All Languages"}
-        </button>
-      </div>
+          Read-only
+        </span>
+      ) : (
+        <div className="flex shrink-0 flex-nowrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => sync(true, false)}
+            disabled={syncing}
+            className="whitespace-nowrap px-3 py-1 rounded bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 text-zinc-200 transition-colors"
+          >
+            {syncing ? "Syncing…" : "Refresh"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (
+                confirm(
+                  "This will temporarily switch your active Duolingo language to sync all courses. Only use when you're not actively using Duolingo.",
+                )
+              ) {
+                sync(true, true);
+              }
+            }}
+            disabled={syncing}
+            className="whitespace-nowrap px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-400 hover:text-zinc-200 transition-colors"
+          >
+            {syncing ? "Syncing…" : "Sync All Languages"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
