@@ -11,11 +11,11 @@ import { assignCourseColors } from "@/lib/colors";
 
 /** History chart: XP gained (delta stack) for each window. */
 const XP_GAIN_RANGES = [
-  { id: "1" as const, label: "1 day" },
-  { id: "7" as const, label: "7 days" },
-  { id: "30" as const, label: "30 days" },
-  { id: "90" as const, label: "90 days" },
-  { id: "all" as const, label: "All time" },
+  { id: "1" as const, label: "1 day", cardLabel: "1d" },
+  { id: "7" as const, label: "7 days", cardLabel: "7d" },
+  { id: "30" as const, label: "30 days", cardLabel: "30d" },
+  { id: "90" as const, label: "90 days", cardLabel: "90d" },
+  { id: "all" as const, label: "All time", cardLabel: "All" },
 ];
 
 const METRICS = [
@@ -122,6 +122,10 @@ export default function HistoryPage() {
     const hit = XP_GAIN_RANGES.find((r) => r.id === view);
     return hit?.label ?? "Selected period";
   }, [view]);
+
+  const windowXpLabel = isGainView
+    ? XP_GAIN_RANGES.find((r) => r.id === view)?.cardLabel
+    : undefined;
 
   // Gain views: match Overview — active courses first by window XP desc, then inactive by total XP desc.
   const sortedCourses = useMemo(() => {
@@ -284,6 +288,7 @@ export default function HistoryPage() {
                 inProgressSkills={c.in_progress_skills != null ? Number(c.in_progress_skills) : undefined}
                 indicatorColor={isGainView ? (isActive ? colorMap[cId] : undefined) : colorMap[cId]}
                 windowXp={windowXp ? (windowXp[cId] ?? 0) : undefined}
+                windowXpLabel={windowXpLabel}
                 dimmed={isGainView && !isActive}
               />
             );

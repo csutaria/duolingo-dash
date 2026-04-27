@@ -43,17 +43,23 @@ describe("CourseCard", () => {
     expect(html).not.toContain("XP total");
   });
 
-  it("shows +windowXp headline with total as subtitle when windowXp is set", () => {
-    const html = renderToStaticMarkup(<CourseCard {...baseProps} windowXp={420} />);
+  it("shows +windowXp headline with window XP label and total subtitle when windowXp is set", () => {
+    const html = renderToStaticMarkup(
+      <CourseCard {...baseProps} windowXp={420} windowXpLabel="7d" />,
+    );
     expect(html).toContain("+420");
+    expect(html).toContain("7d XP");
     expect(html).toContain("12,345 XP total");
   });
 
   it("shows em dash when windowXp is zero", () => {
-    const html = renderToStaticMarkup(<CourseCard {...baseProps} windowXp={0} />);
+    const html = renderToStaticMarkup(
+      <CourseCard {...baseProps} windowXp={0} windowXpLabel="7d" />,
+    );
     expect(html).toContain("\u2014");
     expect(html).toContain("12,345 XP total");
     expect(html).not.toContain("+0");
+    expect(html).not.toContain("7d XP");
   });
 
   it("applies reduced-opacity class when dimmed", () => {

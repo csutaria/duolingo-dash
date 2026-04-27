@@ -9,11 +9,11 @@ import { DailyXpBarChart } from "@/components/DailyXpBarChart";
 import { assignCourseColors } from "@/lib/colors";
 
 const XP_RANGES = [
-  { label: "1d", days: "1" },
-  { label: "7d", days: "7" },
-  { label: "30d", days: "30" },
-  { label: "90d", days: "90" },
-  { label: "All", days: "" },
+  { label: "1d", days: "1", cardLabel: "1d" },
+  { label: "7d", days: "7", cardLabel: "7d" },
+  { label: "30d", days: "30", cardLabel: "30d" },
+  { label: "90d", days: "90", cardLabel: "90d" },
+  { label: "All", days: "", cardLabel: "All" },
 ];
 
 export default function Overview() {
@@ -75,6 +75,9 @@ export default function Overview() {
       ),
     [dailyData],
   );
+
+  const windowXpLabel =
+    XP_RANGES.find((r) => r.days === xpRange)?.cardLabel ?? "selected period";
 
   // Active-in-window first sorted by window XP desc, then inactive by total XP desc
   const sortedCourses = useMemo(() => {
@@ -246,6 +249,7 @@ export default function Overview() {
                 inProgressSkills={c.in_progress_skills != null ? Number(c.in_progress_skills) : undefined}
                 indicatorColor={isActive ? colorMap[cId] : undefined}
                 windowXp={windowXp[cId] ?? 0}
+                windowXpLabel={windowXpLabel}
                 dimmed={!isActive}
               />
             );

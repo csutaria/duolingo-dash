@@ -16,10 +16,11 @@ interface CourseCardProps {
   indicatorColor?: string;
   /**
    * XP gained in the selected window. When provided, the card's headline
-   * shows "+{windowXp} XP" with total XP as a muted subtitle — "what have
+   * shows "+{windowXp} {windowXpLabel} XP" with total XP as a muted subtitle — "what have
    * you been practicing lately" framing for the overview page.
    */
   windowXp?: number;
+  windowXpLabel?: string;
   /**
    * Render the card at reduced visual weight. Used on the overview page
    * for courses that had no XP gain in the selected window.
@@ -39,6 +40,7 @@ export function CourseCard({
   inProgressSkills,
   indicatorColor,
   windowXp,
+  windowXpLabel,
   dimmed,
 }: CourseCardProps) {
   const flag = getLanguageFlag(learningLanguage);
@@ -77,8 +79,13 @@ export function CourseCard({
         <div className="text-right">
           {showWindowXp ? (
             <>
-              <div className="text-xl font-bold text-zinc-100">
+              <div className="text-xl font-bold text-zinc-100 tabular-nums">
                 {windowXp > 0 ? `+${windowXp.toLocaleString()}` : "—"}
+                {windowXp > 0 && windowXpLabel && (
+                  <span className="ml-1 text-xs font-normal text-zinc-500">
+                    {windowXpLabel} XP
+                  </span>
+                )}
               </div>
               <div className="text-xs text-zinc-500">
                 {xp.toLocaleString()} XP total
