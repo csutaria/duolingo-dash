@@ -117,9 +117,6 @@ export function StackedXpChart({
     return `${d.getMonth() + 1}/${d.getDate()}`;
   };
 
-  const formatXp = (v: number) =>
-    v >= 1000 ? `${Math.round(v / 1000)}k` : String(v);
-
   const domain: [number | string, number | string] = [
     domainStart ?? "dataMin",
     "dataMax",
@@ -135,6 +132,80 @@ export function StackedXpChart({
       ? [Math.floor(yMin * 0.98), "dataMax"]
       : [0, "dataMax"];
   const yFloorValue = typeof yDomain[0] === "number" ? yDomain[0] : null;
+
+  // Compute the y-tick set ourselves (d3-style "nice" steps over
+  // [yMinNum, yMaxNum]) so the tick formatter knows exactly which
+  // values it must render distinctly. Recharts' default tick algorithm
+  // picks ticks whose values can be arbitrarily close together — when
+  // combined with `formatXp` rounding to the nearest 1k, that produced
+  // duplicates like `151k, 151k, 152k, 152k, 153k` on narrow zooms
+  // (e.g. 1d / 3d gain views where `_prior * 0.99` lands the floor a
+  // few hundred units below `dataMax`).
+  //
+  // `yPrecision` is the smallest decimal precision (in `k`) such that
+  // labels at the chosen step size are guaranteed distinct:
+  //   step ≥ 1000 → "Xk"      (e.g. "142k")
+  //   step ≥  100 → "X.Xk"    (e.g. "151.0k", "151.5k")
+  //   step ≥   10 → "X.YYk"   (rare; very narrow zoom)
+  //   step ≥    1 → "X.YYYk"  (rarer still)
+  //   else        → raw integer with thousands separator
+  const yMaxNum = (() => {
+    let m = -Infinity;
+    for (const d of data) {
+      const t = Number(d._total ?? 0);
+      if (t > m) m = t;
+    }
+    return isFinite(m) ? m : 0;
+  })();
+  const yMinNum = yFloorValue ?? 0;
+  const yTicks = (() => {
+    if (yMaxNum <= yMinNum) return [yMinNum];
+    const range = yMaxNum - yMinNum;
+    const tickCount = 5;
+    const step0 = range / tickCount;
+    const exp = Math.floor(Math.log10(step0));
+    const pow = 10 ** exp;
+    const error = step0 / pow;
+    let step: number;
+    if (error >= Math.sqrt(50)) step = pow * 10;
+    else if (error >= Math.sqrt(10)) step = pow * 5;
+    else if (error >= Math.SQRT2) step = pow * 2;
+    else step = pow;
+    const start = Math.ceil(yMinNum / step) * step;
+    const ticks: number[] = [];
+    for (let v = start; v <= yMaxNum + step * 1e-9; v += step) ticks.push(v);
+    // Anchor floor and ceiling so the bolded floor label always
+    // matches `yFloorValue`, and `dataMax` always has a corresponding
+    // top tick. Skip duplicates via a 25%-of-step proximity check.
+    if (ticks.length === 0 || ticks[0] - yMinNum > step * 0.25) {
+      ticks.unshift(yMinNum);
+    }
+    if (yMaxNum - ticks[ticks.length - 1] > step * 0.25) {
+      ticks.push(yMaxNum);
+    }
+    return ticks;
+  })();
+  const yPrecision = (() => {
+    if (yTicks.length < 2) return 0;
+    let minStep = Infinity;
+    for (let i = 1; i < yTicks.length; i++) {
+      const s = yTicks[i] - yTicks[i - 1];
+      if (s > 0 && s < minStep) minStep = s;
+    }
+    if (!isFinite(minStep)) return 0;
+    if (minStep >= 1000) return 0;
+    if (minStep >= 100) return 1;
+    if (minStep >= 10) return 2;
+    if (minStep >= 1) return 3;
+    return -1;
+  })();
+  const yAxisWidth = yPrecision >= 2 ? 64 : yPrecision >= 1 ? 56 : 45;
+
+  const formatXp = (v: number) => {
+    if (yPrecision < 0) return v.toLocaleString();
+    if (Math.abs(v) >= 1000) return `${(v / 1000).toFixed(yPrecision)}k`;
+    return v.toLocaleString();
+  };
 
   return (
     <div>
@@ -180,8 +251,9 @@ export function StackedXpChart({
                 </text>
               );
             }}
-            width={45}
+            width={yAxisWidth}
             tickFormatter={formatXp}
+            ticks={yTicks}
             domain={yDomain}
             allowDataOverflow
           />
