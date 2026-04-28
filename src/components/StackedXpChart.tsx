@@ -303,8 +303,6 @@ export function StackedXpChart({
                     color: "#e4e4e7",
                     fontSize: 11,
                     padding: "6px 10px",
-                    maxHeight: 280,
-                    overflowY: "auto",
                   }}
                 >
                   <div style={{ marginBottom: 4, color: "#a1a1aa" }}>{dateLabel}</div>

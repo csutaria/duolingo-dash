@@ -69,24 +69,70 @@ export function DailyXpBarChart({
           />
           <Tooltip
             wrapperStyle={{ zIndex: 50 }}
-            contentStyle={{
-              backgroundColor: "#18181b",
-              border: "1px solid #27272a",
-              borderRadius: "6px",
-              color: "#e4e4e7",
-              fontSize: 11,
-            }}
-            labelFormatter={(date) => {
-              const parts = String(date).split("-");
-              return `${Number(parts[1])}/${Number(parts[2])}/${parts[0]}`;
-            }}
-            formatter={(value: unknown, key: unknown) => {
-              const k = String(key ?? "");
-              if (k === "_untracked") return [Number(value).toLocaleString(), "Untracked"];
-              return [Number(value).toLocaleString(), courseNames[k] ?? k];
-            }}
-            itemSorter={(item) => -(Number(item.value) || 0)}
             cursor={{ fill: "rgba(255,255,255,0.03)" }}
+            // Recharts' default tooltip lists every stacked <Bar> regardless
+            // of value, so multi-day windows show a long row of "0" entries
+            // for inactive courses. Filter to non-zero rows, sort desc, and
+            // render the same chrome as the History tooltip.
+            content={({ active, payload, label }) => {
+              if (!active || !payload || payload.length === 0) return null;
+              const items = payload
+                .filter((p) => Number(p.value) > 0)
+                .map((p) => {
+                  const k = String(p.dataKey ?? "");
+                  const name = k === "_untracked" ? "Untracked" : courseNames[k] ?? k;
+                  return {
+                    k,
+                    name,
+                    value: Number(p.value),
+                    color: p.color ?? p.fill,
+                  };
+                })
+                .sort((a, b) => b.value - a.value);
+              if (items.length === 0) return null;
+              const parts = String(label).split("-");
+              const dateLabel = `${Number(parts[1])}/${Number(parts[2])}/${parts[0]}`;
+              return (
+                <div
+                  style={{
+                    backgroundColor: "#18181b",
+                    border: "1px solid #27272a",
+                    borderRadius: 6,
+                    color: "#e4e4e7",
+                    fontSize: 11,
+                    padding: "6px 10px",
+                  }}
+                >
+                  <div style={{ marginBottom: 4, color: "#a1a1aa" }}>{dateLabel}</div>
+                  {items.map((it) => (
+                    <div
+                      key={it.k}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        lineHeight: "16px",
+                      }}
+                    >
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        <span
+                          style={{
+                            display: "inline-block",
+                            width: 8,
+                            height: 8,
+                            borderRadius: 2,
+                            backgroundColor: it.color || "#71717a",
+                          }}
+                        />
+                        {it.name}
+                      </span>
+                      <span>{it.value.toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            }}
           />
           {sorted.map((id) => (
             <Bar
