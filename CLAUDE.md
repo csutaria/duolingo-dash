@@ -24,7 +24,7 @@ npx jest <name>      # Run specific test file
 
 - **Unofficial API** — no docs, no guarantees. Reverse-engineered from web traffic.
 - The `2017-06-30` versioned path is stable but endpoints can be removed without notice.
-- `/vocabulary/overview` is dead (~2024). Vocab is extracted from skill word lists via the legacy endpoint.
+- `/vocabulary/overview` is dead (~2024) — returns an HTML redirect. The client still calls it (`getVocabulary` in `src/lib/duolingo.ts`); the JSON content-type check throws and the caller's silent `catch` falls through, so vocab effectively comes from legacy skill word lists today.
 - Legacy `/users/{username}` requires **username**, not numeric user ID. Legacy `**language_data`** keys may not match `**courses[].learningLanguage`** — skill sync uses `**src/lib/legacy-language-data.ts**`; semantics in `**docs/api-map.md**` (§⑤, Local SQLite).
 - Duolingo avatar URLs need a size suffix (`/xlarge`) to be publicly accessible. Base URLs return 403.
 - XP summary entries from the API can have null fields — always default to safe values before DB insert.

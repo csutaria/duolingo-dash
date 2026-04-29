@@ -156,7 +156,7 @@ Activated by env: `DUOLINGO_READ_ONLY=1` (also `true`/`yes`, case-insensitive). 
 | `POST /api/sync` | Returns `503 { "error": "read-only" }`. |
 | `POST /api/sync-course` | Returns `503 { "error": "read-only" }`. |
 | `POST /api/polling` | Returns `503 { "error": "read-only" }`. |
-| `GET /api/status` | Returns `{ readOnly: true, authenticated: false, polling: false, dbStatus, resolvedTimezone, resolvedTimezoneSource, timezoneOverride, nightlyHour }` (other timer fields are nulled — they don't apply). `nightlyHour` and `timezoneOverride` are exposed so the read-only UI can show the same settings rows grayed-out. `getAppSettings()` is read-defensive when the table is missing on an un-migrated DB. |
+| `GET /api/status` | Returns the **same shape** as the normal-mode payload, with sentinel values for fields that don't apply: `readOnly: true`, `authenticated: false`, `polling: false`, `paused: false`, `currentlyRunning: false`, `currentSync: null`, `expectedDurationMs: { single: null, cycle: null }`, `lastSyncResult: null`, `msUntilNextXpCheck: null`, `msUntilNextNightlySync: null`, `syncMode: "baseline"`, `fastIdleTicks: 0`, `fastIdleTicksRequired: 5`. `dbStatus`, `resolvedTimezone`, `resolvedTimezoneSource`, `timezoneOverride`, and `nightlyHour` are real values read from the DB. The shape parity is intentional — the UI takes one render path for both modes. `getAppSettings()` is read-defensive when the table is missing on an un-migrated DB. |
 | `SyncBar` UI | Renders a blue **"Read-only"** pill in place of Refresh / Sync All. The status panel shows "Display-only instance. Writes are disabled." instead of the pause toggle. The `Last sync` row + Timezone row still render from `dbStatus`. |
 
 Caveats and follow-ups (these are why this is a "display" mode, not "follower" mode):
@@ -259,7 +259,11 @@ Progress is derived client-side as `min(1, elapsed / expectedDurationMs[type])` 
 | `/api/debug`       | `GET`                                               | Dev-only (`NODE_ENV === "development"`). Returns raw user + legacy-language resolution per course.                                                                                                  |
 
 
-`/api/status` and `/api/data` do not require auth in `DEMO_MODE` (env `DEMO_MODE=true`) — they read from `data/mock.db` seeded by `scripts/seed-mock.js`.
+In `DEMO_MODE` (env `DEMO_MODE=true`):
+
+- `/api/status` short-circuits to a small fixture payload (`{ demoMode: true, readOnly, resolvedTimezone, resolvedTimezoneSource, timezoneOverride: null }`) **without reading any DB**. None of the polling/sync/dbStatus fields are populated.
+- `/api/data` reads from `data/mock.db` (seeded by `scripts/seed-mock.js`) instead of `data/duolingo.db`. The path swap happens in `getDb()` (`src/lib/db.ts`); the rest of the read pipeline is unchanged.
+- Neither route requires `DUOLINGO_JWT`.
 
 ## Pause semantics
 
