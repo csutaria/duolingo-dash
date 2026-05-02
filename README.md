@@ -7,7 +7,11 @@ Personal Duolingo learning dashboard. All data stays local — API calls go dire
 <details>
 <summary>More screenshots</summary>
 
-![History](docs/screenshots/history.png)
+![History — Change (30d)](docs/screenshots/history-change.png)
+
+![History — Total (cumulative)](docs/screenshots/history-total.png)
+
+![History — Streak details](docs/screenshots/history-streak.png)
 
 ![Course Detail](docs/screenshots/course-detail.png)
 
@@ -23,7 +27,7 @@ npm install
 
 ### Regenerate README screenshots (demo)
 
-One command re-seeds `data/mock.db`, starts a demo-only `next dev` on **port 3001** with a separate **`.next-demo/`** build cache (so it does not touch `data/duolingo.db` or your normal `.next/` on port 3000), writes the PNGs under `docs/screenshots/`, then stops the server:
+One command re-seeds `data/mock.db`, starts a demo-only `next dev` on **port 3001** with a separate **`.next-demo/`** build cache (so it does not touch `data/duolingo.db` or your normal `.next/` on port 3000), writes the PNGs under `docs/screenshots/` (including three History shots: change / total / streak), then stops the server:
 
 ```bash
 npx playwright install chromium   # once per machine

@@ -62,9 +62,6 @@ async function captureHistoryScreenshots(page) {
   const changePath = path.join(SCREENSHOTS_DIR, "history-change.png");
   await page.screenshot({ path: changePath, fullPage: false });
   log(`  saved ${path.relative(REPO_ROOT, changePath)}`);
-  const readmeHistoryPath = path.join(SCREENSHOTS_DIR, "history.png");
-  fs.copyFileSync(changePath, readmeHistoryPath);
-  log(`  saved ${path.relative(REPO_ROOT, readmeHistoryPath)} (copy for README)`);
 
   await page.getByRole("button", { name: "All time" }).click();
   await page.waitForTimeout(600);
@@ -185,7 +182,7 @@ async function main() {
 
 
       // ── 6a. Remove legacy filenames if present ─────────────────────────
-      for (const name of ["xp-history.png"]) {
+      for (const name of ["xp-history.png", "history.png"]) {
         const legacy = path.join(SCREENSHOTS_DIR, name);
         if (fs.existsSync(legacy)) {
           fs.unlinkSync(legacy);
