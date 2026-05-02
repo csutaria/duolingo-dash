@@ -9,12 +9,9 @@
 - Review README for accuracy and completeness
 - Once functionality is stable, do a clean commit
 
-### Demo screenshot regeneration — one command
+### Demo screenshot regeneration — **[shipped]**
 
-- Today screenshots require several manual steps: seed the mock DB (`scripts/seed-mock.js`), start the server with `DEMO_MODE=true` on port 3001, run `scripts/screenshot.js`, stop the server.
-- Goal: a single `npm run screenshots` (or similar) that seeds, boots the demo server, waits for it to be ready, captures all screenshots, and shuts the server down.
-- Should be idempotent and safe to run on a clean checkout. Fail loudly if Playwright isn't installed.
-- Follow-up: document the command in `README.md` and reference it from `docs/testing.md` under the demo/mock coverage backlog.
+`npm run screenshots` (see README) runs `scripts/seed-mock.js`, boots demo `next dev` on port **3001** with `NEXT_DIST_DIR=.next-demo` so it does not contend with a normal dev server, captures `docs/screenshots/*.png` via Playwright, then tears down. First-time setup: `npx playwright install chromium`.
 
 ### Top bar — active language indicator
 

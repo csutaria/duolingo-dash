@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "jest"
+    "test": "jest",
+    "screenshots": "node scripts/screenshots.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.9.0",

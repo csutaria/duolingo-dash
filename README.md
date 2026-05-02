@@ -7,7 +7,7 @@ Personal Duolingo learning dashboard. All data stays local — API calls go dire
 <details>
 <summary>More screenshots</summary>
 
-![History](docs/screenshots/xp-history.png)
+![History](docs/screenshots/history.png)
 
 ![Course Detail](docs/screenshots/course-detail.png)
 
@@ -19,6 +19,15 @@ Personal Duolingo learning dashboard. All data stays local — API calls go dire
 
 ```bash
 npm install
+```
+
+### Regenerate README screenshots (demo)
+
+One command re-seeds `data/mock.db`, starts a demo-only `next dev` on **port 3001** with a separate **`.next-demo/`** build cache (so it does not touch `data/duolingo.db` or your normal `.next/` on port 3000), writes the PNGs under `docs/screenshots/`, then stops the server:
+
+```bash
+npx playwright install chromium   # once per machine
+npm run screenshots
 ```
 
 ### Get your JWT

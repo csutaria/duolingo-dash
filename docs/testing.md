@@ -129,12 +129,12 @@ Not in this push. Add when we revisit the path-sectioned sync path.
 
 ### Demo mode / mock data / screenshot pipeline
 
-The biggest uncovered surface today. Goal: keep the demo story from silently drifting when the main code evolves.
+**Capture is automated** (`npm run screenshots` → `scripts/screenshots.js`); the items below are still the biggest *test* gaps for keeping the demo story from silently drifting when the main code evolves.
 
-- `DEMO_MODE` routing — `/api/status` short-circuits with `{ demoMode: true, resolvedTimezone, resolvedTimezoneSource }`; `/api/data` reads from `data/mock.db` without requiring `DUOLINGO_JWT`.
+- `DEMO_MODE` routing — `/api/status` short-circuits with a small fixture (`demoMode`, `readOnly`, `resolvedTimezone`, `resolvedTimezoneSource`, `timezoneOverride: null`); `/api/data` reads from `data/mock.db` without requiring `DUOLINGO_JWT`.
 - `scripts/seed-mock.js` produces a DB whose schema matches the live `initSchema()` — run real migrations against the seeded mock DB and assert no drift.
 - Every table queried by `/api/data` has at least one row in the seeded mock DB. Fail loudly when someone adds a new query and forgets the fixture.
-- `scripts/screenshot.js` smoke test — runs end-to-end against `DEMO_MODE=true` and produces the expected image files. Acceptable to mark as slow / CI-only.
+- `scripts/screenshots.js` / `npm run screenshots` **CI smoke test** — assert exit 0 and expected files under `docs/screenshots/` (acceptable to mark slow / CI-only). The script itself is the manual workflow replacement; automated *assertion* in Jest is still open.
 - Mock DB schema drift regression — when `initSchema()` adds a column, the mock DB must have it too (via the real migration path at seed time, or an explicit assertion in tests).
 
 ### Deferred

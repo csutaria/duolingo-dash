@@ -582,14 +582,6 @@ export function SyncBar() {
                     ? `Check in ~${nextCheckMin}m`
                     : "Polling";
 
-  if (demoMode) {
-    return (
-      <span className="text-xs text-zinc-500 border border-zinc-700 rounded px-2 py-1">
-        Demo
-      </span>
-    );
-  }
-
   const panelVisible = pinned || ((hover || focused) && !suppressed);
 
   const handleIndicatorClick = useCallback(() => {
@@ -604,6 +596,17 @@ export function SyncBar() {
       return next;
     });
   }, []);
+
+  // Keep ALL hooks above any conditional return — when /api/status first
+  // lands with `demoMode: true`, an early return here used to skip
+  // `handleIndicatorClick` and tripped "Rendered fewer hooks than expected".
+  if (demoMode) {
+    return (
+      <span className="text-xs text-zinc-500 border border-zinc-700 rounded px-2 py-1">
+        Demo
+      </span>
+    );
+  }
 
   return (
     <div className="flex shrink-0 flex-nowrap items-center justify-end gap-3 text-sm">

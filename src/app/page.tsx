@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useData } from "@/lib/hooks";
 import { StatCard } from "@/components/StatCard";
 import { CourseCard } from "@/components/CourseCard";
@@ -8,6 +8,48 @@ import { MetaSeriesCard } from "@/components/MetaSeriesCard";
 import { DailyXpBarChart } from "@/components/DailyXpBarChart";
 import { assignCourseColors } from "@/lib/colors";
 import { getXpWindowOption, useSharedXpWindow, XP_WINDOW_OPTIONS } from "@/lib/xp-window";
+
+// Up to two uppercase initials drawn from `name` (preferred) or `username`.
+// Falls back to "?" when neither is available.
+function initialsFor(name: unknown, username: unknown): string {
+  const source = String((name ?? username ?? "") || "").trim();
+  if (!source) return "?";
+  const parts = source.split(/\s+/).filter(Boolean);
+  const letters = parts.length >= 2
+    ? parts[0][0] + parts[1][0]
+    : source.slice(0, 2);
+  return letters.toUpperCase();
+}
+
+function Avatar({ picture, name, username }: { picture: unknown; name: unknown; username: unknown }) {
+  // Duolingo CDN sometimes 403s without `/xlarge`, sometimes regardless. We
+  // start by trying the image; if it errors, swap to an initials chip so the
+  // header never shows a broken-image icon. Same path serves the demo seed,
+  // which sets picture = NULL.
+  const [errored, setErrored] = useState(false);
+  const src = picture != null && !errored
+    ? `${String(picture).replace(/^\/\//, "https://")}/xlarge`
+    : null;
+  if (src) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={src}
+        alt=""
+        onError={() => setErrored(true)}
+        className="w-16 h-16 rounded-full border-2 border-zinc-700 bg-zinc-800 object-cover"
+      />
+    );
+  }
+  return (
+    <div
+      className="w-16 h-16 rounded-full border-2 border-zinc-700 bg-zinc-800 flex items-center justify-center text-zinc-200 text-xl font-semibold"
+      aria-hidden
+    >
+      {initialsFor(name, username)}
+    </div>
+  );
+}
 
 export default function Overview() {
   const { data: profile, loading: pLoading } = useData<Record<string, unknown>>("profile");
@@ -127,14 +169,11 @@ export default function Overview() {
   return (
     <div className="space-y-8">
       <section className="flex items-center gap-4">
-        {profile.picture != null && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={`${String(profile.picture).replace(/^\/\//, "https://")}/xlarge`}
-            alt=""
-            className="w-16 h-16 rounded-full border-2 border-zinc-700"
-          />
-        )}
+        <Avatar
+          picture={profile.picture}
+          name={profile.name}
+          username={profile.username}
+        />
         <div>
           <h2 className="text-2xl font-bold">{String(profile.name || profile.username)}</h2>
           <p className="text-sm text-zinc-500">
