@@ -292,7 +292,12 @@ export function StackedXpChart({
                 })
                 .sort((a, b) => b.value - a.value);
               if (items.length === 0) return null;
-              const d = new Date(Number(label));
+              const row = payload[0]?.payload as Record<string, unknown> | undefined;
+              const ts =
+                row && typeof row._t === "number"
+                  ? Number(row._t)
+                  : Number(label);
+              const d = new Date(ts);
               const dateLabel = `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
               return (
                 <div

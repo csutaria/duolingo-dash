@@ -18,8 +18,38 @@
 
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const http = require("http");
 const { spawn } = require("child_process");
+
+/**
+ * Playwright’s normal install locations (when PLAYWRIGHT_BROWSERS_PATH is unset).
+ * Cursor/agent sandboxes often set HOME / PLAYWRIGHT_BROWSERS_PATH under
+ * cursor-sandbox-cache, so Chromium is missing there even after a local install.
+ * This reuses the same cache as `npx playwright install chromium` in your shell.
+ * Set PLAYWRIGHT_BROWSERS_PATH yourself to override; `0` is left as-is (bundled).
+ */
+function defaultPlaywrightBrowsersPath() {
+  const home = os.homedir();
+  if (process.platform === "darwin") {
+    return path.join(home, "Library", "Caches", "ms-playwright");
+  }
+  if (process.platform === "win32") {
+    const local = process.env.LOCALAPPDATA;
+    if (local) return path.join(local, "ms-playwright");
+    return path.join(home, "AppData", "Local", "ms-playwright");
+  }
+  return path.join(home, ".cache", "ms-playwright");
+}
+
+function ensurePlaywrightBrowsersPath() {
+  const cur = process.env.PLAYWRIGHT_BROWSERS_PATH;
+  if (cur === "0") return;
+  const norm = cur ? cur.replace(/\\/g, "/") : "";
+  const looksSandbox = norm.includes("cursor-sandbox-cache");
+  if (cur && !looksSandbox) return;
+  process.env.PLAYWRIGHT_BROWSERS_PATH = defaultPlaywrightBrowsersPath();
+}
 
 const PORT = 3001;
 const DEMO_DIST_DIR = ".next-demo";
@@ -85,6 +115,7 @@ async function captureHistoryScreenshots(page) {
 }
 
 async function main() {
+  ensurePlaywrightBrowsersPath();
   // ── 1. Playwright sanity check ─────────────────────────────────────────
   let chromium;
   try {

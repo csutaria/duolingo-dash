@@ -8,6 +8,7 @@
 npm run dev          # Start dev server
 npm run build        # Production build (includes type checking)
 npm test             # Run all tests
+npm run screenshots  # After changing chart components — refresh docs/screenshots for review (demo)
 npx jest --watch     # Watch mode
 npx jest <name>      # Run specific test file
 ```

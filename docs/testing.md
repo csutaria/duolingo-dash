@@ -131,6 +131,8 @@ Not in this push. Add when we revisit the path-sectioned sync path.
 
 **Capture is automated** (`npm run screenshots` → `scripts/screenshots.js`); the items below are still the biggest *test* gaps for keeping the demo story from silently drifting when the main code evolves.
 
+Contributors changing chart components (`DailyMetricChart`, `StackedXpChart`, `XpChart`, …) should re-run `npm run screenshots` before merge so `docs/screenshots/` stays accurate for review.
+
 - `DEMO_MODE` routing — `/api/status` short-circuits with a small fixture (`demoMode`, `readOnly`, `resolvedTimezone`, `resolvedTimezoneSource`, `timezoneOverride: null`); `/api/data` reads from `data/mock.db` without requiring `DUOLINGO_JWT`.
 - `scripts/seed-mock.js` produces a DB whose schema matches the live `initSchema()` — run real migrations against the seeded mock DB and assert no drift.
 - Every table queried by `/api/data` has at least one row in the seeded mock DB. Fail loudly when someone adds a new query and forgets the fixture.

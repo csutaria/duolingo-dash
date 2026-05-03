@@ -206,10 +206,25 @@ const rrand = (a, b) => a + Math.floor(rng() * (b - a + 1));
 
 // ── Demo data shape ──────────────────────────────────────────────────────────
 
-const CURRENT_STREAK_DAYS = 247;
+const HISTORY_DAYS = 365;
+
+/**
+ * Recent streak narrative (days-ago index i; larger i = older):
+ *   • i ∈ [26..120] — still inside the “recent closed” epoch (orange streak days).
+ *   • i = 25 — streak lost that calendar day (red “Streak end” line); gray, no XP.
+ *   • i ∈ [21..24] — gap between epochs: no practice, no shields (gray).
+ *   • i ∈ [0..20] — current open streak from restart (blue “Streak start” at i=20).
+ * Freezes only occur on days where a streak exists to protect (new streak i<21,
+ * or prior epoch 26..120), never in the gap or on the loss day.
+ */
+const CURRENT_STREAK_LEN = 21;
+const CURRENT_STREAK_START_DAYS_AGO = 20;
+const RECENT_CLOSED_STREAK_START_DAYS_AGO = 120;
+const RECENT_CLOSED_STREAK_END_DAYS_AGO = 25;
+
+/** Ancient closed epoch (reference lines off the 30d chart; still useful for “All” / long windows). */
 const CLOSED_EPOCH_START_DAYS_AGO = 510;
 const CLOSED_EPOCH_END_DAYS_AGO = 280; // length 230 days
-const HISTORY_DAYS = 365;
 
 // Course definitions: latest XP, plus a multiplier curve indicating how the
 // XP grew (`shape`) and how much of it predates tracking (`pretrack` is the
@@ -286,13 +301,14 @@ function populate(db) {
       timezone, updated_at)
     VALUES (1, 999001, 'alexrivera', 'Alex Rivera', NULL,
       'Language enthusiast. 8 languages and counting.',
-      ?, ?, ?, 230, ?, 50, 1240, 340, 1,
+      ?, ?, ?, ?, ?, 50, 1240, 340, 1,
       1519776000, 'DUOLINGO_ES_EN', 'es', 'en', 'I want to travel more',
       'America/Los_Angeles', ?)
   `).run(
-    CURRENT_STREAK_DAYS,
-    dateStr(CURRENT_STREAK_DAYS),
-    CURRENT_STREAK_DAYS,
+    CURRENT_STREAK_LEN,
+    dateStr(CURRENT_STREAK_START_DAYS_AGO),
+    CURRENT_STREAK_LEN,
+    RECENT_CLOSED_STREAK_START_DAYS_AGO - RECENT_CLOSED_STREAK_END_DAYS_AGO,
     totalXp,
     isoNow(),
   );
@@ -310,7 +326,7 @@ function populate(db) {
         if (offset > 0 && xp === 0) continue; // skip historical zeros to keep the chart clean
         // Crowns scale ~0.0046 per XP (eyeballed from the original seed).
         const crowns = Math.round(xp * 0.0046);
-        const streak = offset === 0 ? CURRENT_STREAK_DAYS : Math.max(0, CURRENT_STREAK_DAYS - offset);
+        const streak = offset === 0 ? CURRENT_STREAK_LEN : Math.max(0, CURRENT_STREAK_LEN - offset);
         // Only record mistake_count on the latest snapshot (matches live behavior:
         // mistakes are written via UPDATE on the most-recent snapshot row).
         const mistakes = offset === 0 ? rrand(3, 18) : null;
@@ -321,28 +337,31 @@ function populate(db) {
   insertSnaps();
 
   // ── xp_daily (full year) ─────────────────────────────────────────────────
-  // Pattern: most days are practice (varied), some zero days, a few flagged
-  // frozen, a few implied_freeze inside the current streak window.
   const xpStmt = db.prepare(`
     INSERT OR IGNORE INTO xp_daily (date, gained_xp, frozen, streak_extended, daily_goal_xp, num_sessions, total_session_time, implied_freeze)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
-  // Hand-pick a handful of "shield" days — explicit Duolingo-flagged frozen.
-  // These fall OUTSIDE the current streak window (they're from the prior
-  // closed epoch, so they don't conflict with implied_freeze coloring).
-  const explicitFreezeDays = new Set([
-    300, 305, 340, 360, 395, 430,
-  ]);
-  // Implied-freeze days inside the CURRENT streak window (zero XP, but the
-  // streak survived → must have been a shield Duolingo didn't flag).
-  // These are 50, 110, 175 days ago → all < CURRENT_STREAK_DAYS = 247.
-  const impliedFreezeDays = new Set([50, 110, 175]);
-  // Plain zero-practice days (no shield). Outside current streak window so
-  // they don't break it. Show up gray on the streak chart.
-  const lapseDays = new Set([
-    260, 265, 271, 320, 322, 380,
-  ]);
+  /** Calendar days off between losing the streak (i=25) and restarting (i=20). */
+  const STREAK_GAP_DAYS = new Set([21, 22, 23, 24]);
+  const STREAK_LOSS_DAY_AGO = RECENT_CLOSED_STREAK_END_DAYS_AGO;
+
+  function inRecentClosedEpochPractice(i) {
+    return i >= STREAK_LOSS_DAY_AGO + 1 && i <= RECENT_CLOSED_STREAK_START_DAYS_AGO;
+  }
+
+  /** Shields only make sense when an active streak exists to protect. */
+  function canHaveFreezeShield(i) {
+    if (STREAK_GAP_DAYS.has(i) || i === STREAK_LOSS_DAY_AGO) return false;
+    if (i < CURRENT_STREAK_LEN) return true;
+    if (inRecentClosedEpochPractice(i)) return true;
+    return i > RECENT_CLOSED_STREAK_START_DAYS_AGO;
+  }
+
+  // Explicit freezes: i=7 new streak, i=28 prior epoch (30d window); rest for long-range demos.
+  const explicitFreezeDays = new Set([7, 28, 300, 305, 340, 360, 395, 430]);
+  const impliedFreezeDays = new Set([4, 15, 50, 110, 175]);
+  const lapseDays = new Set([260, 265, 271, 320, 322, 380]);
 
   const insertDaily = db.transaction(() => {
     for (let i = 0; i < HISTORY_DAYS; i++) {
@@ -352,10 +371,20 @@ function populate(db) {
       let streakExtended = 0;
       let impliedFreeze = 0;
 
-      const isExplicitFreeze = explicitFreezeDays.has(i);
-      const isImpliedFreeze = impliedFreezeDays.has(i);
+      if (STREAK_GAP_DAYS.has(i)) {
+        // No practice during intentional gap; streak already broken.
+        xpStmt.run(date, 0, 0, 0, 50, 0, 0, 0);
+        continue;
+      }
+      if (i === STREAK_LOSS_DAY_AGO) {
+        xpStmt.run(date, 0, 0, 0, 50, 0, 0, 0);
+        continue;
+      }
+
+      const isExplicitFreeze = explicitFreezeDays.has(i) && canHaveFreezeShield(i);
+      const isImpliedFreeze = impliedFreezeDays.has(i) && canHaveFreezeShield(i);
       const isLapse = lapseDays.has(i);
-      const insideCurrentStreak = i < CURRENT_STREAK_DAYS;
+      const insideCurrentStreak = i < CURRENT_STREAK_LEN;
 
       if (isExplicitFreeze) {
         frozen = 1;
@@ -366,16 +395,17 @@ function populate(db) {
       } else if (isLapse) {
         gainedXp = 0;
       } else {
-        // Practice day. Vary intensity by day-of-week-ish via index.
-        const heavy = (i % 7 === 5) || (i % 7 === 6); // weekend bursts
+        const heavy = (i % 7 === 5) || (i % 7 === 6);
         const light = (i % 7 === 1) || (i % 7 === 3);
         if (heavy) gainedXp = rrand(380, 720);
         else if (light) gainedXp = rrand(100, 220);
         else gainedXp = rrand(150, 380);
-        // Inside the current streak, every practice day extends the streak;
-        // outside, only some did (to keep it realistic without the chart
-        // re-deriving the prior streak's coloring).
-        streakExtended = insideCurrentStreak ? 1 : (rng() > 0.4 ? 1 : 0);
+
+        if (insideCurrentStreak || inRecentClosedEpochPractice(i)) {
+          streakExtended = 1;
+        } else {
+          streakExtended = rng() > 0.4 ? 1 : 0;
+        }
       }
 
       const sessions = gainedXp > 0 ? Math.max(1, Math.round(gainedXp / 120)) : 0;
@@ -386,7 +416,7 @@ function populate(db) {
   insertDaily();
 
   // ── Streak epochs ────────────────────────────────────────────────────────
-  // One closed epoch (longer history) + one ongoing epoch (current streak).
+  // Ancient closed + recent closed (end date in the 30d window) + current open.
   const epochStmt = db.prepare(`
     INSERT INTO streak_epochs (streak_start_date, streak_end_date, streak_length, detected_at)
     VALUES (?, ?, ?, ?)
@@ -394,14 +424,20 @@ function populate(db) {
   epochStmt.run(
     dateStr(CLOSED_EPOCH_START_DAYS_AGO),
     dateStr(CLOSED_EPOCH_END_DAYS_AGO),
-    CLOSED_EPOCH_START_DAYS_AGO - CLOSED_EPOCH_END_DAYS_AGO, // 230
+    CLOSED_EPOCH_START_DAYS_AGO - CLOSED_EPOCH_END_DAYS_AGO,
     daysAgo(CLOSED_EPOCH_END_DAYS_AGO),
   );
   epochStmt.run(
-    dateStr(CURRENT_STREAK_DAYS),
+    dateStr(RECENT_CLOSED_STREAK_START_DAYS_AGO),
+    dateStr(RECENT_CLOSED_STREAK_END_DAYS_AGO),
+    RECENT_CLOSED_STREAK_START_DAYS_AGO - RECENT_CLOSED_STREAK_END_DAYS_AGO,
+    daysAgo(RECENT_CLOSED_STREAK_END_DAYS_AGO),
+  );
+  epochStmt.run(
+    dateStr(CURRENT_STREAK_START_DAYS_AGO),
     null,
     null,
-    daysAgo(CURRENT_STREAK_DAYS),
+    daysAgo(CURRENT_STREAK_START_DAYS_AGO),
   );
 
   // ── Sync log ─────────────────────────────────────────────────────────────

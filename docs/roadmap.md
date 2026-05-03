@@ -68,4 +68,3 @@
 - `strength` and `learned` fields in legacy API may have data for old-path accounts; confirmed 0/false for new-path accounts (like this one). Track whether a new-path alternative exists.
 - Potential starting points: `GET /api/1/dictionary_page`, `/words/hints/{from}/{to}`, `currentCourse` fields from `/2017-06-30/users/{userId}`
 - Feed findings back into api-map.md
-

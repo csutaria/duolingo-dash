@@ -22,7 +22,6 @@ export function XpChart({ data, dataKey = "gained_xp", height = 300, domainStart
     return <div className="text-zinc-500 text-sm">No XP data yet</div>;
   }
 
-  // Parse date string (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS) as local noon to avoid TZ shifts
   const toTimestamp = (d: Record<string, unknown>): number => {
     const dateStr = String(d.date ?? d.snapshot_time ?? "").split(" ")[0];
     const [y, m, day] = dateStr.split("-").map(Number);
@@ -32,7 +31,6 @@ export function XpChart({ data, dataKey = "gained_xp", height = 300, domainStart
   const dateKey = (d: Record<string, unknown>) =>
     String(d.date ?? d.snapshot_time ?? "").split(" ")[0];
 
-  // Deduplicate to one point per calendar day (last snapshot wins)
   const byDay = new Map<string, Record<string, unknown>>();
   for (const d of data) byDay.set(dateKey(d), d);
 
