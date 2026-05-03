@@ -136,6 +136,7 @@ Contributors changing chart components (`DailyMetricChart`, `StackedXpChart`, `X
 - `DEMO_MODE` routing — `/api/status` short-circuits with a small fixture (`demoMode`, `readOnly`, `resolvedTimezone`, `resolvedTimezoneSource`, `timezoneOverride: null`); `/api/data` reads from `data/mock.db` without requiring `DUOLINGO_JWT`.
 - `scripts/seed-mock.js` produces a DB whose schema matches the live `initSchema()` — run real migrations against the seeded mock DB and assert no drift.
 - Every table queried by `/api/data` has at least one row in the seeded mock DB. Fail loudly when someone adds a new query and forgets the fixture.
+- [x] Mock screenshot story consistency — seeded `xp_daily` account totals cover seeded per-course snapshot deltas for standard screenshot windows / anchor intervals, while preserving the streak-loss/freeze/gap narrative and all-time pre-tracking gap (`seed-mock.test.ts`).
 - `scripts/screenshots.js` / `npm run screenshots` **CI smoke test** — assert exit 0 and expected files under `docs/screenshots/` (acceptable to mark slow / CI-only). The script itself is the manual workflow replacement; automated *assertion* in Jest is still open.
 - Mock DB schema drift regression — when `initSchema()` adds a column, the mock DB must have it too (via the real migration path at seed time, or an explicit assertion in tests).
 
@@ -156,4 +157,3 @@ Contributors changing chart components (`DailyMetricChart`, `StackedXpChart`, `X
 3. If you need a DB, construct an in-memory `better-sqlite3` and run the same migrations `initSchema()` runs — don't hand-roll divergent DDL.
 4. If the test spins up any timers (e.g. `setInterval`), use Jest's fake timers or make sure to `stopPolling()` in `afterEach`.
 5. Update the **Current coverage** table in this file when the test lands; tick the backlog checkbox.
-
