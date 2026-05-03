@@ -251,6 +251,8 @@ const COURSES = [
 // Snapshot anchor offsets in days-ago. Latest snapshot (offset 0) is "now";
 // the rest sit at coarser-grained points so the cumulative chart has shape.
 const SNAPSHOT_OFFSETS = [365, 270, 180, 120, 90, 60, 30, 14, 7, 3, 1, 0];
+const ACCOUNT_XP_HEADROOM_RATIO = 0.08;
+const ACCOUNT_XP_HEADROOM_MIN = 75;
 
 function xpAtOffset(course, offsetDays) {
   // offsetDays = 0 → latest XP. >0 → walk backward.
@@ -414,6 +416,7 @@ function populate(db) {
     }
   });
   insertDaily();
+  reconcileDailyXpWithCourseSnapshots(db);
 
   // ── Streak epochs ────────────────────────────────────────────────────────
   // Ancient closed + recent closed (end date in the 30d window) + current open.
@@ -459,6 +462,71 @@ function populate(db) {
   // ── Vocabulary ──────────────────────────────────────────────────────────
   populateSpanishVocab(db);
   populateFrenchVocab(db);
+}
+
+function courseDeltaBetweenOffsets(olderOffset, newerOffset) {
+  return COURSES.reduce((sum, course) => {
+    const olderXp = xpAtOffset(course, olderOffset);
+    const newerXp = xpAtOffset(course, newerOffset);
+    return sum + Math.max(0, newerXp - olderXp);
+  }, 0);
+}
+
+/**
+ * The demo intentionally seeds two independent signals:
+ *   - per-language cumulative snapshots (`course_snapshots.xp`)
+ *   - account-wide daily XP (`xp_daily.gained_xp`)
+ *
+ * Real Duolingo data can lag between those sources, but README screenshots
+ * should tell a coherent story. If an anchor-to-anchor course gain leaves too
+ * little account-wide headroom above the tracked course gains, top up only
+ * existing practice days. Freeze/gap/loss/lapse days stay zero so Streak
+ * Details keeps demonstrating the important states.
+ */
+function reconcileDailyXpWithCourseSnapshots(db) {
+  const selectRows = db.prepare(`
+    SELECT date, gained_xp
+    FROM xp_daily
+    WHERE date >= ? AND date <= ? AND gained_xp > 0
+    ORDER BY date ASC
+  `);
+  const updateRow = db.prepare(`
+    UPDATE xp_daily
+    SET gained_xp = ?, num_sessions = ?, total_session_time = ?
+    WHERE date = ?
+  `);
+
+  const reconcile = db.transaction(() => {
+    for (let i = 0; i < SNAPSHOT_OFFSETS.length - 1; i++) {
+      const olderOffset = SNAPSHOT_OFFSETS[i];
+      const newerOffset = SNAPSHOT_OFFSETS[i + 1];
+      const requiredXp = courseDeltaBetweenOffsets(olderOffset, newerOffset);
+      if (requiredXp <= 0) continue;
+      const targetXp = requiredXp + Math.max(
+        ACCOUNT_XP_HEADROOM_MIN,
+        Math.ceil(requiredXp * ACCOUNT_XP_HEADROOM_RATIO),
+      );
+
+      const startDate = dateStr(olderOffset - 1);
+      const endDate = dateStr(newerOffset);
+      const rows = selectRows.all(startDate, endDate);
+      const currentXp = rows.reduce((sum, row) => sum + Number(row.gained_xp), 0);
+      const shortfall = targetXp - currentXp;
+      if (shortfall <= 0 || rows.length === 0) continue;
+
+      const baseAdd = Math.floor(shortfall / rows.length);
+      const remainder = shortfall % rows.length;
+      rows.forEach((row, rowIndex) => {
+        const extra = baseAdd + (rowIndex < remainder ? 1 : 0);
+        const gainedXp = Number(row.gained_xp) + extra;
+        const sessions = Math.max(1, Math.round(gainedXp / 120));
+        const sessionTime = sessions * (210 + (rowIndex % 5) * 20);
+        updateRow.run(gainedXp, sessions, sessionTime, row.date);
+      });
+    }
+  });
+
+  reconcile();
 }
 
 function populateSpanishSkills(db) {
