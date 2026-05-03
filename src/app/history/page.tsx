@@ -7,7 +7,7 @@ import { CourseCard } from "@/components/CourseCard";
 import { MetaSeriesCard } from "@/components/MetaSeriesCard";
 import { StackedXpChart } from "@/components/StackedXpChart";
 import { DailyMetricChart } from "@/components/DailyMetricChart";
-import { assignCourseColors } from "@/lib/colors";
+import { assignCourseColors, type CourseColorInput } from "@/lib/colors";
 import {
   getXpWindowOption,
   useHistoryAllView,
@@ -73,12 +73,15 @@ export default function HistoryPage() {
     return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12).getTime();
   }, [view]);
 
-  const allCourseIds = useMemo(() => {
-    if (!courses) return [];
-    return courses.map((c) => String(c.course_id)).sort();
+  const courseColorInputs = useMemo<CourseColorInput[]>(() => {
+    return (courses ?? []).map((c) => ({
+      course_id: String(c.course_id),
+      learning_language: c.learning_language != null ? String(c.learning_language) : undefined,
+      xp: Number(c.xp ?? 0),
+    }));
   }, [courses]);
 
-  const colorMap = useMemo(() => assignCourseColors(allCourseIds), [allCourseIds.join(",")]);
+  const colorMap = useMemo(() => assignCourseColors(courseColorInputs), [courseColorInputs]);
 
   const courseIds = useMemo(() => {
     if (!stackData?.length) return [];

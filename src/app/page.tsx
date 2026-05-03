@@ -6,7 +6,7 @@ import { StatCard } from "@/components/StatCard";
 import { CourseCard } from "@/components/CourseCard";
 import { MetaSeriesCard } from "@/components/MetaSeriesCard";
 import { DailyXpBarChart } from "@/components/DailyXpBarChart";
-import { assignCourseColors } from "@/lib/colors";
+import { assignCourseColors, type CourseColorInput } from "@/lib/colors";
 import { getXpWindowOption, useSharedXpWindow, XP_WINDOW_OPTIONS } from "@/lib/xp-window";
 
 // Up to two uppercase initials drawn from `name` (preferred) or `username`.
@@ -61,13 +61,15 @@ export default function Overview() {
     xpRange !== "all" ? { days: xpRange } : undefined
   );
 
-  // Stable color assignment from full course list — shared with XP history page
-  const allCourseIds = useMemo(() => {
-    if (!courses) return [];
-    return courses.map((c) => String(c.course_id)).sort();
+  const courseColorInputs = useMemo<CourseColorInput[]>(() => {
+    return (courses ?? []).map((c) => ({
+      course_id: String(c.course_id),
+      learning_language: c.learning_language != null ? String(c.learning_language) : undefined,
+      xp: Number(c.xp ?? 0),
+    }));
   }, [courses]);
 
-  const colorMap = useMemo(() => assignCourseColors(allCourseIds), [allCourseIds.join(",")]);
+  const colorMap = useMemo(() => assignCourseColors(courseColorInputs), [courseColorInputs]);
 
   // Course IDs present in the daily data (keys other than date/meta)
   const courseIds = useMemo(() => {
@@ -113,19 +115,12 @@ export default function Overview() {
 
   const windowXpLabel = getXpWindowOption(xpRange)?.cardLabel ?? "selected period";
 
-  // Active-in-window first sorted by window XP desc, then inactive by total XP desc
+  // Keep the course list anchored by total XP so the top-language order
+  // stays stable while the window controls change recent-activity labels.
   const sortedCourses = useMemo(() => {
     if (!courses) return [];
-    return [...courses].sort((a, b) => {
-      const aId = String(a.course_id);
-      const bId = String(b.course_id);
-      const aActive = activeInWindow.has(aId) ? 0 : 1;
-      const bActive = activeInWindow.has(bId) ? 0 : 1;
-      if (aActive !== bActive) return aActive - bActive;
-      if (aActive === 0) return (windowXp[bId] ?? 0) - (windowXp[aId] ?? 0);
-      return Number(b.xp) - Number(a.xp);
-    });
-  }, [courses, activeInWindow, windowXp]);
+    return [...courses].sort((a, b) => Number(b.xp) - Number(a.xp));
+  }, [courses]);
 
   if (pLoading && !profile) {
     return <div className="text-zinc-500">Loading...</div>;
