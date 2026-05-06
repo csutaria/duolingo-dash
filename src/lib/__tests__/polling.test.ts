@@ -130,6 +130,52 @@ describe("advanceSyncState reducer", () => {
   });
 });
 
+describe("fast-mode sync gate behavior", () => {
+  beforeEach(() => {
+    jest.resetModules();
+    __resetPollingStateForTests();
+  });
+
+  afterEach(() => {
+    const { clearCurrentSync } = require("../sync-state") as typeof import("../sync-state");
+    clearCurrentSync();
+    jest.resetModules();
+    jest.dontMock("../sync");
+    __resetPollingStateForTests();
+  });
+
+  it("keeps fast mode alive when the quiet-detector wants a full sync but the gate is busy", async () => {
+    const fullSync = jest.fn().mockResolvedValue({
+      type: "full",
+      changed: true,
+      totalXp: 100,
+      timestamp: new Date().toISOString(),
+    });
+    jest.doMock("../sync", () => ({
+      quickCheck: jest.fn().mockResolvedValue({ changed: false, currentXp: 100 }),
+      fullSync,
+    }));
+
+    const polling = require("../polling") as typeof import("../polling");
+    const { getPollingState } = require("../polling-state") as typeof import("../polling-state");
+    const { setCurrentSync } = require("../sync-state") as typeof import("../sync-state");
+    const state = getPollingState();
+    state.mode = "fast";
+    state.fastLastObservedXp = 100;
+    state.fastConsecutiveIdleTicks = polling.FAST_IDLE_TRIGGER_TICKS - 1;
+    setCurrentSync("single");
+
+    const client = { getTotalXp: jest.fn().mockResolvedValue(100) } as unknown as Parameters<
+      typeof polling.startPolling
+    >[0];
+    await polling.__runFastTickForTests(client);
+
+    expect(fullSync).not.toHaveBeenCalled();
+    expect(state.mode).toBe("fast");
+    expect(state.fastConsecutiveIdleTicks).toBe(polling.FAST_IDLE_TRIGGER_TICKS - 1);
+  });
+});
+
 describe("msUntilNextLocalTime", () => {
   const MS_PER_HOUR = 60 * 60 * 1000;
   const originalTz = process.env.TZ;

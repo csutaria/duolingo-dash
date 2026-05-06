@@ -11,6 +11,11 @@ Browser (Next.js client) ─► Next.js API routes (server) ─► duolingo.com
 ```
 
 - Single Next.js process. App Router, server-side API routes.
+- The single writer can serve multiple browser clients at once. "One server"
+  does **not** mean "one request at a time": while one request is awaiting
+  Duolingo or SQLite work, another browser request can enter the same process.
+  Reads are concurrent; sync mutations are single-flight in the writer process
+  so two browsers cannot overlap Duolingo course switches or SQLite writes.
 - JWT lives only in server process memory (`DUOLINGO_JWT` env var). Never on disk.
 - `better-sqlite3` is declared in `serverExternalPackages` (`next.config.ts`) so it is not bundled.
 - All Duolingo calls funnel through `src/lib/duolingo.ts` (`DuolingoClient`).
@@ -27,7 +32,10 @@ Browser (Next.js client) ─► Next.js API routes (server) ─► duolingo.com
    - If XP unchanged → run `fullSync(cycleAll=true)`. Covers idle days.
 5. **Pause** stops all three: baseline, fast, nightly. Pause is in-memory only — process restart always resumes polling.
 6. **HMR safety**: all mutable polling state lives on a shared `globalThis.__duolingoPollingState` bucket so Next.js dev reloads don't orphan timers.
-7. **Single-flight**: `isRunning` on the shared bucket acts as a global mutex across baseline/fast/nightly/manual paths — only one `fullSync` runs at a time.
+7. **Single-flight**: `isRunning` on the shared bucket, claimed through
+   `src/lib/sync-lock.ts`, acts as the writer-process mutex across
+   baseline/fast/nightly/manual/course-detail paths — only one sync mutation
+   runs at a time.
 
 ## Server state (in-memory, shared `globalThis` bucket)
 
@@ -191,7 +199,13 @@ State transitions (pure, unit-tested as `advanceSyncState`):
 
 Guards:
 
-- `isRunning` (global mutex on the bucket). Only one sync at a time across baseline/fast/nightly/manual paths.
+- `isRunning` (process-wide mutex on the shared bucket), acquired via
+  `tryAcquireSyncGate()`. Only one sync mutation at a time across
+  baseline/fast/nightly/manual/course-detail paths. A busy browser request
+  returns an immediate skipped-style response; requests are not queued.
+- Fast-mode quiet-detector retries are preserved: if the 5th quiet tick wants
+  to fire `fullSync(cycleAll=true)` but another mutation owns the gate, fast
+  mode remains active so the next 2-minute tick can try again.
 - `startPolling` is idempotent: `if (state.baselineTimer) return;` — re-entrant calls (HMR, multiple `ensureClient`s) are no-ops.
 - Kickoff `baselineTick` runs once on start, but **only if** `isRunning === false` **and** `getCurrentSync() == null` (regression guard, commit 84935f3).
 - `manualRefresh` keeps its 30 s cooldown and respects `isRunning`.
@@ -281,4 +295,3 @@ Pause does not: call Duolingo directly, touch the real Duolingo app or account, 
 - `**TESTING.md**` — what's covered, how to run, future test backlog.
 - `**README.md**` — user-facing setup and behavior.
 - `**CLAUDE.md**` / `**AGENTS.md**` — agent-oriented notes.
-

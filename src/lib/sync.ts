@@ -17,6 +17,7 @@ import { resolveLegacyLanguageData } from "./legacy-language-data";
 import { clearCurrentSync, setCurrentSync } from "./sync-state";
 import { DuolingoUser, XpSummary } from "./types";
 import { formatLocalDate, getResolvedTimezone } from "./tz";
+import { SYNC_ALREADY_RUNNING, tryAcquireSyncGate } from "./sync-lock";
 
 export interface SyncResult {
   type: "quick" | "full" | "skipped";
@@ -104,7 +105,21 @@ export async function syncIfChanged(
       logSync({ syncType: "quick", totalXp: currentXp, success: true });
       return { type: "skipped", changed: false, totalXp: currentXp, timestamp: now };
     }
-    return fullSync(client);
+    const gate = tryAcquireSyncGate();
+    if (!gate.acquired) {
+      return {
+        type: "skipped",
+        changed: false,
+        totalXp: currentXp,
+        error: SYNC_ALREADY_RUNNING,
+        timestamp: now,
+      };
+    }
+    try {
+      return await fullSync(client);
+    } finally {
+      gate.release();
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logSync({ syncType: "quick", totalXp: 0, success: false, errorMessage: msg });
