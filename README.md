@@ -4,9 +4,6 @@ Personal Duolingo learning dashboard. All data stays local — API calls go dire
 
 ![Overview](docs/screenshots/overview.png)
 
-<details>
-<summary>More screenshots</summary>
-
 ![History — Change (30d)](docs/screenshots/history-change.png)
 
 ![History — Total (cumulative)](docs/screenshots/history-total.png)
@@ -16,8 +13,6 @@ Personal Duolingo learning dashboard. All data stays local — API calls go dire
 ![Course Detail](docs/screenshots/course-detail.png)
 
 ![Vocabulary](docs/screenshots/vocabulary.png)
-
-</details>
 
 ## Setup
 
