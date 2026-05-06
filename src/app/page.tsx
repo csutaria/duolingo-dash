@@ -7,6 +7,7 @@ import { CourseCard } from "@/components/CourseCard";
 import { MetaSeriesCard } from "@/components/MetaSeriesCard";
 import { DailyXpBarChart } from "@/components/DailyXpBarChart";
 import { assignCourseColors, type CourseColorInput } from "@/lib/colors";
+import { sortCoursesForXpGainView } from "@/lib/course-sort";
 import { getXpWindowOption, useSharedXpWindow, XP_WINDOW_OPTIONS } from "@/lib/xp-window";
 
 // Up to two uppercase initials drawn from `name` (preferred) or `username`.
@@ -115,12 +116,11 @@ export default function Overview() {
 
   const windowXpLabel = getXpWindowOption(xpRange)?.cardLabel ?? "selected period";
 
-  // Keep the course list anchored by total XP so the top-language order
-  // stays stable while the window controls change recent-activity labels.
+  // Active-in-window first sorted by window XP desc, then inactive by total XP desc.
   const sortedCourses = useMemo(() => {
     if (!courses) return [];
-    return [...courses].sort((a, b) => Number(b.xp) - Number(a.xp));
-  }, [courses]);
+    return sortCoursesForXpGainView(courses, activeInWindow, windowXp);
+  }, [courses, activeInWindow, windowXp]);
 
   if (pLoading && !profile) {
     return <div className="text-zinc-500">Loading...</div>;

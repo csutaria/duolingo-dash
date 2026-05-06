@@ -8,6 +8,7 @@ import { MetaSeriesCard } from "@/components/MetaSeriesCard";
 import { StackedXpChart } from "@/components/StackedXpChart";
 import { DailyMetricChart } from "@/components/DailyMetricChart";
 import { assignCourseColors, type CourseColorInput } from "@/lib/colors";
+import { sortCoursesByTotalXp, sortCoursesForXpGainView } from "@/lib/course-sort";
 import {
   getXpWindowOption,
   useHistoryAllView,
@@ -141,17 +142,9 @@ export default function HistoryPage() {
   const sortedCourses = useMemo(() => {
     if (!courses?.length) return [];
     if (!isGainView || !windowXp) {
-      return [...courses].sort((a, b) => Number(b.xp) - Number(a.xp));
+      return sortCoursesByTotalXp(courses);
     }
-    return [...courses].sort((a, b) => {
-      const aId = String(a.course_id);
-      const bId = String(b.course_id);
-      const aActive = activeInWindow.has(aId) ? 0 : 1;
-      const bActive = activeInWindow.has(bId) ? 0 : 1;
-      if (aActive !== bActive) return aActive - bActive;
-      if (aActive === 0) return (windowXp[bId] ?? 0) - (windowXp[aId] ?? 0);
-      return Number(b.xp) - Number(a.xp);
-    });
+    return sortCoursesForXpGainView(courses, activeInWindow, windowXp);
   }, [courses, isGainView, windowXp, activeInWindow]);
 
   const profileTotalXp = useMemo(() => {
