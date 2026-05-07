@@ -13,6 +13,10 @@ Browser (Next.js client) ─► Next.js API routes (server) ─► duolingo.com
 - Single Next.js process. App Router, server-side API routes.
 - JWT lives only in server process memory (`DUOLINGO_JWT` env var). Never on disk.
 - `better-sqlite3` is declared in `serverExternalPackages` (`next.config.ts`) so it is not bundled.
+- Development-mode Next.js internal assets are origin-guarded. `next.config.ts`
+  allows loopback aliases by default and extends `allowedDevOrigins` from
+  `NEXT_ALLOWED_DEV_ORIGINS` (comma/space-separated hostnames) for non-localhost
+  dev access. Browser API calls remain same-origin relative URLs.
 - All Duolingo calls funnel through `src/lib/duolingo.ts` (`DuolingoClient`).
 
 ## Sync requirements (authoritative)
@@ -281,4 +285,3 @@ Pause does not: call Duolingo directly, touch the real Duolingo app or account, 
 - `**TESTING.md**` — what's covered, how to run, future test backlog.
 - `**README.md**` — user-facing setup and behavior.
 - `**CLAUDE.md**` / `**AGENTS.md**` — agent-oriented notes.
-
