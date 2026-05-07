@@ -7,12 +7,18 @@
 import { isReadOnlyMode } from "../read-only";
 
 const original = process.env.DUOLINGO_READ_ONLY;
+const originalRole = process.env.DUOLINGO_INSTANCE_ROLE;
 
 afterEach(() => {
   if (original === undefined) {
     delete process.env.DUOLINGO_READ_ONLY;
   } else {
     process.env.DUOLINGO_READ_ONLY = original;
+  }
+  if (originalRole === undefined) {
+    delete process.env.DUOLINGO_INSTANCE_ROLE;
+  } else {
+    process.env.DUOLINGO_INSTANCE_ROLE = originalRole;
   }
 });
 
@@ -38,6 +44,7 @@ describe("isReadOnlyMode", () => {
 
   it("is false when the env var is unset entirely", () => {
     delete process.env.DUOLINGO_READ_ONLY;
+    delete process.env.DUOLINGO_INSTANCE_ROLE;
     expect(isReadOnlyMode()).toBe(false);
   });
 });

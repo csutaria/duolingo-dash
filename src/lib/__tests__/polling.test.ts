@@ -141,6 +141,7 @@ describe("fast-mode sync gate behavior", () => {
     clearCurrentSync();
     jest.resetModules();
     jest.dontMock("../sync");
+    jest.dontMock("../external-sync-lock");
     __resetPollingStateForTests();
   });
 
@@ -173,6 +174,79 @@ describe("fast-mode sync gate behavior", () => {
     expect(fullSync).not.toHaveBeenCalled();
     expect(state.mode).toBe("fast");
     expect(state.fastConsecutiveIdleTicks).toBe(polling.FAST_IDLE_TRIGGER_TICKS - 1);
+  });
+
+  it("keeps fast mode alive when the external account lock is busy", async () => {
+    const fullSync = jest.fn().mockResolvedValue({
+      type: "full",
+      changed: true,
+      totalXp: 100,
+      timestamp: new Date().toISOString(),
+    });
+    jest.doMock("../sync", () => ({
+      quickCheck: jest.fn().mockResolvedValue({ changed: false, currentXp: 100 }),
+      fullSync,
+    }));
+    jest.doMock("../external-sync-lock", () => ({
+      tryAcquireExternalSyncLock: jest.fn(async () => ({
+        acquired: false,
+        reason: "Sync already running",
+      })),
+    }));
+
+    const polling = require("../polling") as typeof import("../polling");
+    const { getPollingState } = require("../polling-state") as typeof import("../polling-state");
+    const state = getPollingState();
+    state.mode = "fast";
+    state.fastLastObservedXp = 100;
+    state.fastConsecutiveIdleTicks = polling.FAST_IDLE_TRIGGER_TICKS - 1;
+
+    const client = {
+      getTotalXp: jest.fn().mockResolvedValue(100),
+      getUserId: jest.fn(() => 123),
+    } as unknown as Parameters<typeof polling.startPolling>[0];
+    await polling.__runFastTickForTests(client);
+
+    expect(fullSync).not.toHaveBeenCalled();
+    expect(state.mode).toBe("fast");
+    expect(state.isRunning).toBe(false);
+  });
+});
+
+describe("manualRefresh sync gate behavior", () => {
+  beforeEach(() => {
+    jest.resetModules();
+    __resetPollingStateForTests();
+  });
+
+  afterEach(() => {
+    jest.resetModules();
+    jest.dontMock("../external-sync-lock");
+    __resetPollingStateForTests();
+  });
+
+  it("does not consume the cooldown when the external account lock is busy", async () => {
+    jest.doMock("../external-sync-lock", () => ({
+      tryAcquireExternalSyncLock: jest.fn(async () => ({
+        acquired: false,
+        reason: "Sync already running",
+      })),
+    }));
+    const polling = require("../polling") as typeof import("../polling");
+    const { getPollingState } = require("../polling-state") as typeof import("../polling-state");
+    const client = { getUserId: jest.fn(() => 123) } as unknown as Parameters<
+      typeof polling.manualRefresh
+    >[0];
+
+    const result = await polling.manualRefresh(client);
+
+    expect(result).toMatchObject({
+      type: "skipped",
+      changed: false,
+      error: "Sync already running",
+    });
+    expect(getPollingState().isRunning).toBe(false);
+    expect(getPollingState().lastManualRefreshAtMs).toBe(0);
   });
 });
 

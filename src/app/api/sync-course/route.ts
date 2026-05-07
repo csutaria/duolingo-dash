@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { ensureClient } from "@/lib/server-state";
 import { syncCourseDetails } from "@/lib/sync";
 import { isReadOnlyMode } from "@/lib/read-only";
-import { SYNC_ALREADY_RUNNING, tryAcquireSyncGate } from "@/lib/sync-lock";
+import { tryAcquireAccountSyncGate } from "@/lib/sync-lock";
 
 export async function POST(request: Request) {
   if (isReadOnlyMode()) {
@@ -20,13 +20,13 @@ export async function POST(request: Request) {
       );
     }
 
-    const gate = tryAcquireSyncGate();
+    const gate = await tryAcquireAccountSyncGate(client);
     if (!gate.acquired) {
       return NextResponse.json({
         success: false,
         switchedBack: true,
-        error: SYNC_ALREADY_RUNNING,
-        details: [SYNC_ALREADY_RUNNING],
+        error: gate.reason,
+        details: [gate.reason],
       });
     }
 
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
     try {
       result = await syncCourseDetails(client, courseId, learningLanguage, fromLanguage);
     } finally {
-      gate.release();
+      await gate.release();
     }
     return NextResponse.json(result);
   } catch (err) {

@@ -1,6 +1,7 @@
 import { DuolingoClient, initClient } from "./duolingo";
 import { startPolling, stopPolling, isPolling } from "./polling";
 import { getPollingState } from "./polling-state";
+import { isBackgroundSyncEnabled } from "./instance-role";
 import { isReadOnlyMode } from "./read-only";
 
 // `client` and `userPaused` live on the shared globalThis bucket in
@@ -27,7 +28,7 @@ export function ensureClient(): DuolingoClient {
 
   state.client = initClient(jwt);
 
-  if (!isPolling() && !state.userPaused) {
+  if (isBackgroundSyncEnabled() && !isPolling() && !state.userPaused) {
     startPolling(state.client);
   }
 
@@ -62,7 +63,7 @@ export function pauseUserPolling(): void {
 export function resumeUserPolling(): void {
   const state = getPollingState();
   state.userPaused = false;
-  if (state.client && !isPolling()) {
+  if (isBackgroundSyncEnabled() && state.client && !isPolling()) {
     startPolling(state.client);
   }
 }

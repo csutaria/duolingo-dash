@@ -23,9 +23,8 @@
  * `README.md` § "Running a display-only second instance" for the
  * deployment story.
  */
+import { getInstanceRole } from "./instance-role";
+
 export function isReadOnlyMode(): boolean {
-  const v = process.env.DUOLINGO_READ_ONLY;
-  if (!v) return false;
-  const lower = v.toLowerCase();
-  return lower === "1" || lower === "true" || lower === "yes";
+  return getInstanceRole() === "read-only";
 }

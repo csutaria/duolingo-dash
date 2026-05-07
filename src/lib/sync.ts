@@ -17,13 +17,14 @@ import { resolveLegacyLanguageData } from "./legacy-language-data";
 import { clearCurrentSync, setCurrentSync } from "./sync-state";
 import { DuolingoUser, XpSummary } from "./types";
 import { formatLocalDate, getResolvedTimezone } from "./tz";
-import { SYNC_ALREADY_RUNNING, tryAcquireSyncGate } from "./sync-lock";
+import { tryAcquireAccountSyncGate } from "./sync-lock";
 
 export interface SyncResult {
   type: "quick" | "full" | "skipped";
   changed: boolean;
   totalXp: number;
   error?: string;
+  warnings?: string[];
   timestamp: string;
 }
 
@@ -64,8 +65,9 @@ export async function fullSync(client: DuolingoClient, cycleAllCourses = false):
       saveAchievements(achievements);
     }
 
+    let warnings: string[] = [];
     if (cycleAllCourses) {
-      await syncAllCourseDetails(client, user);
+      warnings = await syncAllCourseDetails(client, user);
     } else {
       await saveLanguageDetails(client, user.currentCourseId, user.learningLanguage);
     }
@@ -77,7 +79,7 @@ export async function fullSync(client: DuolingoClient, cycleAllCourses = false):
       durationMs: Date.now() - startedAtMs,
       cycleAll: cycleAllCourses,
     });
-    return { type: "full", changed: true, totalXp, timestamp: now };
+    return { type: "full", changed: true, totalXp, warnings: warnings.length ? warnings : undefined, timestamp: now };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logSync({
@@ -105,20 +107,20 @@ export async function syncIfChanged(
       logSync({ syncType: "quick", totalXp: currentXp, success: true });
       return { type: "skipped", changed: false, totalXp: currentXp, timestamp: now };
     }
-    const gate = tryAcquireSyncGate();
+    const gate = await tryAcquireAccountSyncGate(client);
     if (!gate.acquired) {
       return {
         type: "skipped",
         changed: false,
         totalXp: currentXp,
-        error: SYNC_ALREADY_RUNNING,
+        error: gate.reason,
         timestamp: now,
       };
     }
     try {
       return await fullSync(client);
     } finally {
-      gate.release();
+      await gate.release();
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -234,13 +236,16 @@ function saveAchievements(achievements: Array<Record<string, unknown> | { name?:
   upsertAchievements(mapped);
 }
 
-async function syncAllCourseDetails(client: DuolingoClient, user: DuolingoUser): Promise<void> {
+async function syncAllCourseDetails(client: DuolingoClient, user: DuolingoUser): Promise<string[]> {
   const originalCourseId = user.currentCourseId;
   const originalLearning = user.learningLanguage;
   const originalFrom = user.fromLanguage;
+  const warnings: string[] = [];
+  let expectedActiveCourseId = originalCourseId;
 
   // Sync the currently active course first (no switch needed)
   await saveLanguageDetails(client, user.currentCourseId, user.learningLanguage);
+  await recordActiveCourseDrift(client, expectedActiveCourseId, warnings, "after syncing starting course");
 
   // Cycle through remaining courses in REVERSE of `user.courses` order.
   // The API-returned `user.courses` mirrors the Duolingo app's own
@@ -254,21 +259,54 @@ async function syncAllCourseDetails(client: DuolingoClient, user: DuolingoUser):
     if (course.id === originalCourseId) continue;
     try {
       await client.switchCourse(course.id, course.learningLanguage, course.fromLanguage);
+      expectedActiveCourseId = course.id;
       await new Promise((r) => setTimeout(r, 1000));
       await saveLanguageDetails(client, course.id, course.learningLanguage);
+      await recordActiveCourseDrift(client, expectedActiveCourseId, warnings, `after syncing ${course.id}`);
     } catch {
       // skip this course if switch or fetch fails
     }
   }
 
-  // Restore original course
+  const activeBeforeRestore = await readActiveCourseId(client);
+  if (activeBeforeRestore && activeBeforeRestore !== expectedActiveCourseId) {
+    warnings.push(
+      `Active course changed outside this cycle sync: expected ${expectedActiveCourseId}, saw ${activeBeforeRestore}`,
+    );
+  }
+
+  // Restore original course.
   if (user.courses.length > 1) {
     try {
       await client.switchCourse(originalCourseId, originalLearning, originalFrom);
+      expectedActiveCourseId = originalCourseId;
     } catch {
       // best effort restore
     }
   }
+  await recordActiveCourseDrift(client, expectedActiveCourseId, warnings, "after restoring starting course");
+  return warnings;
+}
+
+async function readActiveCourseId(client: DuolingoClient): Promise<string | null> {
+  try {
+    return (await client.getUser()).currentCourseId;
+  } catch {
+    return null;
+  }
+}
+
+async function recordActiveCourseDrift(
+  client: DuolingoClient,
+  expectedCourseId: string,
+  warnings: string[],
+  context: string,
+): Promise<void> {
+  const activeCourseId = await readActiveCourseId(client);
+  if (!activeCourseId || activeCourseId === expectedCourseId) return;
+  warnings.push(
+    `Active course drift ${context}: expected ${expectedCourseId}, saw ${activeCourseId}`,
+  );
 }
 
 /**
@@ -461,12 +499,25 @@ export async function syncCourseDetails(
       details.push(`Legacy failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
+    if (needsSwitch) {
+      const activeAfterFetch = await readActiveCourseId(client);
+      if (activeAfterFetch && activeAfterFetch !== courseId) {
+        details.push(`Warning: active course changed during sync; expected ${courseId}, saw ${activeAfterFetch}`);
+      }
+    }
+
     let switchedBack = false;
     if (needsSwitch) {
       try {
         await client.switchCourse(originalCourseId, originalLearning, originalFrom);
         switchedBack = true;
         details.push(`Switched back to ${originalCourseId}`);
+        const activeAfterRestore = await readActiveCourseId(client);
+        if (activeAfterRestore && activeAfterRestore !== originalCourseId) {
+          details.push(
+            `Warning: active course restore did not stick; expected ${originalCourseId}, saw ${activeAfterRestore}`,
+          );
+        }
       } catch (err) {
         details.push(`Failed to switch back: ${err instanceof Error ? err.message : String(err)}`);
       }

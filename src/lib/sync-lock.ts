@@ -1,16 +1,18 @@
 import { getPollingState } from "./polling-state";
 import { getCurrentSync } from "./sync-state";
+import type { DuolingoClient } from "./duolingo";
+import { SYNC_LOCK_UNAVAILABLE, tryAcquireExternalSyncLock } from "./external-sync-lock";
 
 export const SYNC_ALREADY_RUNNING = "Sync already running";
 
 export type SyncGateBusy = {
   acquired: false;
-  reason: typeof SYNC_ALREADY_RUNNING;
+  reason: string;
 };
 
 export type SyncGateAcquired = {
   acquired: true;
-  release: () => void;
+  release: () => void | Promise<void>;
 };
 
 export type SyncGate = SyncGateBusy | SyncGateAcquired;
@@ -46,6 +48,40 @@ export async function withSyncGate<T>(
   try {
     return await fn();
   } finally {
-    gate.release();
+    await gate.release();
   }
+}
+
+/**
+ * Full account-level gate for sync mutations. The process-local gate is first
+ * so this server never starts overlapping DB writes; the optional Redis/Valkey
+ * lock is second so separate writer processes do not race the Duolingo
+ * account's active course.
+ */
+export async function tryAcquireAccountSyncGate(client: DuolingoClient): Promise<SyncGate> {
+  const localGate = tryAcquireSyncGate();
+  if (!localGate.acquired) return localGate;
+
+  let externalGate: SyncGate;
+  try {
+    externalGate = await tryAcquireExternalSyncLock(client);
+  } catch {
+    localGate.release();
+    return { acquired: false, reason: SYNC_LOCK_UNAVAILABLE };
+  }
+  if (!externalGate.acquired) {
+    localGate.release();
+    return externalGate;
+  }
+
+  return {
+    acquired: true,
+    release: async () => {
+      try {
+        await externalGate.release();
+      } finally {
+        localGate.release();
+      }
+    },
+  };
 }

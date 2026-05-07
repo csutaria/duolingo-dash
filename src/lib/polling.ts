@@ -4,7 +4,7 @@ import { getCurrentSync, CurrentSync } from "./sync-state";
 import { getPollingState } from "./polling-state";
 import { epochMsForLocalTime, getLocalParts } from "./tz";
 import { getAppSettings } from "./app-settings";
-import { SYNC_ALREADY_RUNNING, tryAcquireSyncGate } from "./sync-lock";
+import { SYNC_ALREADY_RUNNING, tryAcquireAccountSyncGate } from "./sync-lock";
 
 /**
  * @internal exported for tests
@@ -22,12 +22,12 @@ export function shouldKickoffPoll(state: {
   return !state.isRunning && state.currentSync == null;
 }
 
-function skippedBecauseSyncRunning(totalXp = 0): SyncResult {
+function skippedBecauseSyncRunning(totalXp = 0, reason = SYNC_ALREADY_RUNNING): SyncResult {
   return {
     type: "skipped",
     changed: false,
     totalXp,
-    error: SYNC_ALREADY_RUNNING,
+    error: reason,
     timestamp: new Date().toISOString(),
   };
 }
@@ -239,7 +239,7 @@ async function fastTick(client: DuolingoClient): Promise<void> {
   );
 
   if (transition.fireFullSync) {
-    const gate = tryAcquireSyncGate();
+    const gate = await tryAcquireAccountSyncGate(client);
     // Stay in fast mode when another mutation owns the gate. The next fast
     // tick will retry instead of silently dropping the automatic cycle sync.
     if (!gate.acquired) return;
@@ -249,7 +249,7 @@ async function fastTick(client: DuolingoClient): Promise<void> {
     } catch {
       // logged inside fullSync
     } finally {
-      gate.release();
+      await gate.release();
     }
     return;
   }
@@ -297,7 +297,7 @@ async function nightlyTick(client: DuolingoClient): Promise<void> {
       return;
     }
 
-    const gate = tryAcquireSyncGate();
+    const gate = await tryAcquireAccountSyncGate(client);
     if (!gate.acquired) return;
     try {
       state.lastSyncResult = await fullSync(client, true);
@@ -305,7 +305,7 @@ async function nightlyTick(client: DuolingoClient): Promise<void> {
     } catch {
       // logged inside fullSync
     } finally {
-      gate.release();
+      await gate.release();
     }
   } finally {
     scheduleNightly(client);
@@ -379,16 +379,16 @@ export async function manualRefresh(client: DuolingoClient): Promise<SyncResult 
   if (state.isRunning) {
     return skippedBecauseSyncRunning(state.lastSyncResult?.totalXp ?? 0);
   }
-  const gate = tryAcquireSyncGate();
+  const gate = await tryAcquireAccountSyncGate(client);
   if (!gate.acquired) {
-    return skippedBecauseSyncRunning(state.lastSyncResult?.totalXp ?? 0);
+    return skippedBecauseSyncRunning(state.lastSyncResult?.totalXp ?? 0, gate.reason);
   }
   state.lastManualRefreshAtMs = now;
   try {
     state.lastSyncResult = await fullSync(client);
     return state.lastSyncResult;
   } finally {
-    gate.release();
+    await gate.release();
   }
 }
 

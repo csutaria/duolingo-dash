@@ -13,6 +13,8 @@ import { getMedianDurationMs } from "@/lib/db";
 import { getResolvedTimezone, getResolvedTimezoneSource } from "@/lib/tz";
 import { getAppSettings } from "@/lib/app-settings";
 import { isReadOnlyMode } from "@/lib/read-only";
+import { getInstanceRole } from "@/lib/instance-role";
+import { isExternalSyncLockConfigured } from "@/lib/external-sync-lock";
 
 const DEMO_MODE = process.env.DEMO_MODE === "true";
 
@@ -21,6 +23,8 @@ export async function GET() {
     return NextResponse.json({
       demoMode: true,
       readOnly: isReadOnlyMode(),
+      instanceRole: getInstanceRole(),
+      externalSyncLockConfigured: isExternalSyncLockConfigured(),
       resolvedTimezone: getResolvedTimezone(),
       resolvedTimezoneSource: getResolvedTimezoneSource(),
       timezoneOverride: null,
@@ -28,6 +32,8 @@ export async function GET() {
   }
 
   const readOnly = isReadOnlyMode();
+  const instanceRole = getInstanceRole();
+  const externalSyncLockConfigured = isExternalSyncLockConfigured();
   if (readOnly) {
     // Read-only instance: no client, no polling, no sync timers. Most
     // status fields are meaningless; return only what the UI needs to
@@ -40,6 +46,8 @@ export async function GET() {
     return NextResponse.json({
       authenticated: false,
       readOnly: true,
+      instanceRole,
+      externalSyncLockConfigured,
       resolvedTimezone: getResolvedTimezone(),
       resolvedTimezoneSource: getResolvedTimezoneSource(),
       timezoneOverride: getAppSettings().timezone_override,
@@ -47,6 +55,7 @@ export async function GET() {
       paused: false,
       currentlyRunning: false,
       currentSync: null,
+      localSyncState: { isRunning: false, currentSync: null },
       expectedDurationMs: { single: null, cycle: null },
       lastSyncResult: null,
       dbStatus: getSyncStatus(),
@@ -64,6 +73,7 @@ export async function GET() {
   const dbStatus = client ? getSyncStatus() : null;
   const timing = getSyncTimingStatus();
   const currentSync = getCurrentSync();
+  const currentlyRunning = isCurrentlyRunning();
   const expectedDurationMs = client
     ? {
         single: getMedianDurationMs(false, 3),
@@ -74,13 +84,16 @@ export async function GET() {
   return NextResponse.json({
     authenticated: client !== null,
     readOnly: false,
+    instanceRole,
+    externalSyncLockConfigured,
     resolvedTimezone: getResolvedTimezone(),
     resolvedTimezoneSource: getResolvedTimezoneSource(),
     timezoneOverride: getAppSettings().timezone_override,
     polling: isPolling(),
     paused: isUserPaused(),
-    currentlyRunning: isCurrentlyRunning(),
+    currentlyRunning,
     currentSync,
+    localSyncState: { isRunning: currentlyRunning, currentSync },
     expectedDurationMs,
     lastSyncResult: syncResult,
     dbStatus,

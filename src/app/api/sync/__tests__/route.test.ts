@@ -58,6 +58,7 @@ beforeEach(() => {
   jest.dontMock("@/lib/sync");
   jest.dontMock("@/lib/polling");
   jest.dontMock("@/lib/sync-lock");
+  jest.dontMock("@/lib/external-sync-lock");
   __resetPollingStateForTests();
   clearCurrentSync();
 });
@@ -73,6 +74,7 @@ afterEach(() => {
   jest.dontMock("@/lib/sync");
   jest.dontMock("@/lib/polling");
   jest.dontMock("@/lib/sync-lock");
+  jest.dontMock("@/lib/external-sync-lock");
   __resetPollingStateForTests();
   clearCurrentSync();
 });
@@ -149,6 +151,30 @@ describe("POST /api/sync", () => {
       expect(mocks.ensureClient).toHaveBeenCalledTimes(1);
       expect(mocks.fullSync).not.toHaveBeenCalled();
       expect(mocks.notifyAllCourseSyncComplete).not.toHaveBeenCalled();
+    });
+
+    it("returns skipped for force=true when the external account lock is busy", async () => {
+      const mocks = setupMocks();
+      jest.doMock("@/lib/external-sync-lock", () => ({
+        tryAcquireExternalSyncLock: jest.fn(async () => ({
+          acquired: false,
+          reason: "Sync already running",
+        })),
+      }));
+      const { POST } = loadRoute();
+
+      const res = await POST(postRequest({ force: true, cycleAll: true }));
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body).toMatchObject({
+        type: "skipped",
+        changed: false,
+        totalXp: 0,
+        error: "Sync already running",
+      });
+      expect(getPollingState().isRunning).toBe(false);
+      expect(mocks.fullSync).not.toHaveBeenCalled();
     });
 
     it("does not send a completion notification when manualRefresh skips", async () => {

@@ -187,4 +187,59 @@ describe("syncAllCourseDetails course-selector ordering", () => {
 
     expect(switchCalls).toHaveLength(0);
   });
+
+  it("returns no course-drift warnings when Dash-owned switches stay active", async () => {
+    const courses = [
+      { id: "A", xp: 100 },
+      { id: "B", xp: 200 },
+    ];
+    let activeId = "A";
+    const user = () => makeUser(courses, activeId);
+    const client = {
+      ...makeClient(user()),
+      getUser: jest.fn(() => Promise.resolve(user())),
+      switchCourse: jest.fn((id: string) => {
+        switchCalls.push(id);
+        activeId = id;
+        return Promise.resolve();
+      }),
+    } as unknown as DuolingoClient;
+
+    const result = await mod.fullSync(client, true);
+
+    expect(result.warnings).toBeUndefined();
+    expect(activeId).toBe("A");
+  });
+
+  it("returns a warning when the active course changes outside the cycle sync", async () => {
+    const courses = [
+      { id: "A", xp: 100 },
+      { id: "B", xp: 200 },
+    ];
+    let activeId = "A";
+    let getUserCalls = 0;
+    const user = (id = activeId) => makeUser(courses, id);
+    const client = {
+      ...makeClient(user()),
+      getUser: jest.fn(() => {
+        getUserCalls += 1;
+        if (getUserCalls === 3) return Promise.resolve(user("C"));
+        return Promise.resolve(user());
+      }),
+      switchCourse: jest.fn((id: string) => {
+        switchCalls.push(id);
+        activeId = id;
+        return Promise.resolve();
+      }),
+    } as unknown as DuolingoClient;
+
+    const result = await mod.fullSync(client, true);
+
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("expected B, saw C"),
+      ]),
+    );
+    expect(activeId).toBe("A");
+  });
 });
