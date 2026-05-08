@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ensureClient } from "@/lib/server-state";
 import { syncCourseDetails } from "@/lib/sync";
 import { isReadOnlyMode } from "@/lib/read-only";
+import { tryAcquireAccountSyncGate } from "@/lib/sync-lock";
 
 export async function POST(request: Request) {
   if (isReadOnlyMode()) {
@@ -19,7 +20,22 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = await syncCourseDetails(client, courseId, learningLanguage, fromLanguage);
+    const gate = await tryAcquireAccountSyncGate(client);
+    if (!gate.acquired) {
+      return NextResponse.json({
+        success: false,
+        switchedBack: true,
+        error: gate.reason,
+        details: [gate.reason],
+      });
+    }
+
+    let result;
+    try {
+      result = await syncCourseDetails(client, courseId, learningLanguage, fromLanguage);
+    } finally {
+      await gate.release();
+    }
     return NextResponse.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Sync failed";

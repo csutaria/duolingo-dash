@@ -11,6 +11,11 @@ Browser (Next.js client) ─► Next.js API routes (server) ─► duolingo.com
 ```
 
 - Single Next.js process. App Router, server-side API routes.
+- The single writer can serve multiple browser clients at once. "One server"
+  does **not** mean "one request at a time": while one request is awaiting
+  Duolingo or SQLite work, another browser request can enter the same process.
+  Reads are concurrent; sync mutations are single-flight in the writer process
+  so two browsers cannot overlap Duolingo course switches or SQLite writes.
 - JWT lives only in server process memory (`DUOLINGO_JWT` env var). Never on disk.
 - `better-sqlite3` is declared in `serverExternalPackages` (`next.config.ts`) so it is not bundled.
 - All Duolingo calls funnel through `src/lib/duolingo.ts` (`DuolingoClient`).
@@ -27,7 +32,10 @@ Browser (Next.js client) ─► Next.js API routes (server) ─► duolingo.com
    - If XP unchanged → run `fullSync(cycleAll=true)`. Covers idle days.
 5. **Pause** stops all three: baseline, fast, nightly. Pause is in-memory only — process restart always resumes polling.
 6. **HMR safety**: all mutable polling state lives on a shared `globalThis.__duolingoPollingState` bucket so Next.js dev reloads don't orphan timers.
-7. **Single-flight**: `isRunning` on the shared bucket acts as a global mutex across baseline/fast/nightly/manual paths — only one `fullSync` runs at a time.
+7. **Single-flight**: `isRunning` on the shared bucket, claimed through
+   `src/lib/sync-lock.ts`, acts as the writer-process mutex across
+   baseline/fast/nightly/manual/course-detail paths — only one sync mutation
+   runs at a time.
 
 ## Server state (in-memory, shared `globalThis` bucket)
 
@@ -142,7 +150,22 @@ NIGHTLY_HOUR_DEFAULT (= 2)  ─────┘
 - `GET /api/status` reports the effective hour as `nightlyHour` (always present in non-DEMO responses, including read-only). The UI surfaces it as a `<select>` next to "Next nightly sync" in the SyncBar status panel.
 
 
-## Read-only mode (`DUOLINGO_READ_ONLY=1`)
+## Instance roles
+
+Dash has three server roles. `DUOLINGO_READ_ONLY=1` is still supported
+and maps to the `read-only` role.
+
+| Role | Env | Behavior |
+| --- | --- | --- |
+| `writer` | default, or `DUOLINGO_INSTANCE_ROLE=writer` | Full current behavior: `ensureClient()` builds the JWT client and starts baseline/fast/nightly polling unless paused. Manual sync routes are enabled. |
+| `manual` | `DUOLINGO_INSTANCE_ROLE=manual` | Builds the JWT client and allows manual sync routes, but never starts background baseline/fast/nightly polling timers. `POST /api/polling { "action": "resume" }` clears pause state but does not start timers. |
+| `read-only` | `DUOLINGO_INSTANCE_ROLE=read-only` or `DUOLINGO_READ_ONLY=1` | Display-only process. No JWT client, no polling, no writes. Mutating routes return `503 { "error": "read-only" }`. |
+
+`GET /api/status` reports `instanceRole`, `externalSyncLockConfigured`,
+and `localSyncState: { isRunning, currentSync }` alongside the legacy
+`readOnly`, `currentlyRunning`, and `currentSync` fields.
+
+### Read-only mode
 
 A second instance can be run as a **display-only** process pointing at the same SQLite file. Use this to test/preview the UI on another machine without contending with the writer for the Duolingo API or the SQLite write lock.
 
@@ -156,7 +179,7 @@ Activated by env: `DUOLINGO_READ_ONLY=1` (also `true`/`yes`, case-insensitive). 
 | `POST /api/sync` | Returns `503 { "error": "read-only" }`. |
 | `POST /api/sync-course` | Returns `503 { "error": "read-only" }`. |
 | `POST /api/polling` | Returns `503 { "error": "read-only" }`. |
-| `GET /api/status` | Returns the **same shape** as the normal-mode payload, with sentinel values for fields that don't apply: `readOnly: true`, `authenticated: false`, `polling: false`, `paused: false`, `currentlyRunning: false`, `currentSync: null`, `expectedDurationMs: { single: null, cycle: null }`, `lastSyncResult: null`, `msUntilNextXpCheck: null`, `msUntilNextNightlySync: null`, `syncMode: "baseline"`, `fastIdleTicks: 0`, `fastIdleTicksRequired: 5`. `dbStatus`, `resolvedTimezone`, `resolvedTimezoneSource`, `timezoneOverride`, and `nightlyHour` are real values read from the DB. The shape parity is intentional — the UI takes one render path for both modes. `getAppSettings()` is read-defensive when the table is missing on an un-migrated DB. |
+| `GET /api/status` | Returns the **same shape** as the normal-mode payload, with sentinel values for fields that don't apply: `readOnly: true`, `instanceRole: "read-only"`, `authenticated: false`, `polling: false`, `paused: false`, `currentlyRunning: false`, `currentSync: null`, `localSyncState: { isRunning: false, currentSync: null }`, `expectedDurationMs: { single: null, cycle: null }`, `lastSyncResult: null`, `msUntilNextXpCheck: null`, `msUntilNextNightlySync: null`, `syncMode: "baseline"`, `fastIdleTicks: 0`, `fastIdleTicksRequired: 5`. `dbStatus`, `resolvedTimezone`, `resolvedTimezoneSource`, `timezoneOverride`, `nightlyHour`, and `externalSyncLockConfigured` are real values read at request time. The shape parity is intentional — the UI takes one render path for both modes. `getAppSettings()` is read-defensive when the table is missing on an un-migrated DB. |
 | `SyncBar` UI | Renders a blue **"Read-only"** pill in place of Refresh / Sync All. The status panel shows "Display-only instance. Writes are disabled." instead of the pause toggle. The `Last sync` row + Timezone row still render from `dbStatus`. |
 
 Caveats and follow-ups (these are why this is a "display" mode, not "follower" mode):
@@ -191,7 +214,22 @@ State transitions (pure, unit-tested as `advanceSyncState`):
 
 Guards:
 
-- `isRunning` (global mutex on the bucket). Only one sync at a time across baseline/fast/nightly/manual paths.
+- `isRunning` (process-wide mutex on the shared bucket), acquired via
+  `tryAcquireSyncGate()`. Only one sync mutation at a time across
+  baseline/fast/nightly/manual/course-detail paths. A busy browser request
+  returns an immediate skipped-style response; requests are not queued.
+- Optional Redis/Valkey account lock, enabled only when
+  `DUOLINGO_SYNC_LOCK_REDIS_URL` is set. Sync mutations acquire the local
+  gate first, then claim `duolingo-dash:sync:<namespace>` with
+  `SET key token NX PX ttl`. `DUOLINGO_SYNC_LOCK_NAMESPACE` overrides the
+  default namespace (`user:<Duolingo user id>`). Heartbeat and release both
+  check the owner token, so one process cannot delete another process's
+  lock. If the external lock is configured but unavailable, mutations fail
+  closed with a skipped/error response instead of risking overlapping
+  course switches.
+- Fast-mode quiet-detector retries are preserved: if the 5th quiet tick wants
+  to fire `fullSync(cycleAll=true)` but another mutation owns the gate, fast
+  mode remains active so the next 2-minute tick can try again.
 - `startPolling` is idempotent: `if (state.baselineTimer) return;` — re-entrant calls (HMR, multiple `ensureClient`s) are no-ops.
 - Kickoff `baselineTick` runs once on start, but **only if** `isRunning === false` **and** `getCurrentSync() == null` (regression guard, commit 84935f3).
 - `manualRefresh` keeps its 30 s cooldown and respects `isRunning`.
@@ -218,6 +256,11 @@ Guards:
 5. Course detail:
   - `cycleAllCourses = false` → `saveLanguageDetails` for the active course only (endpoints ⑤, ⑦).
   - `cycleAllCourses = true` → `syncAllCourseDetails` cycles through every course via endpoint ⑥ (`PATCH /users/{id}`) — **this is account-wide and visible in the real Duolingo app**. Each PATCH moves its target to the top of the account's course-selector (a recency stack), and the API-returned `user.courses` array mirrors that order. The cycle visits non-active courses in **reverse of `user.courses`** and restores the active course last — the identity permutation, so the selector ends the cycle in the exact order the user started with.
+  - During course-cycling syncs, Dash records the starting active course,
+    treats its own switches as expected active-course changes, re-reads the
+    account's active course after fetch steps, and returns `warnings` if it
+    sees an unexpected course. The final restore remains best-effort and is
+    attempted even when drift is observed.
 6. `logSync({ syncType: "full", totalXp, success, durationMs, cycleAll })`.
 7. `clearCurrentSync()` in a `finally` — always clears, even on throw.
 
@@ -250,7 +293,7 @@ Progress is derived client-side as `min(1, elapsed / expectedDurationMs[type])` 
 
 | Route              | Method                                              | Purpose                                                                                                                                                                                             |
 | ------------------ | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/api/status`      | `GET`                                               | Auth state, polling on/off, `paused`, `currentlyRunning`, `currentSync`, `expectedDurationMs.{single,cycle}`, last sync result, DB status, `msUntilNextXpCheck`, `msUntilNextNightlySync`, `syncMode` (`"baseline"`/`"fast"`), `fastIdleTicks`, `fastIdleTicksRequired`, **`nightlyHour`** (effective `0..23` in **R**), **`resolvedTimezone`** (IANA **R**), **`resolvedTimezoneSource`** (`settings` / `env` / `profile` / `system`), **`timezoneOverride`** (raw stored `app_settings.timezone_override`, `null` when unset), **`readOnly`** (`true` when `DUOLINGO_READ_ONLY=1`). Primary source for UI polling state. |
+| `/api/status`      | `GET`                                               | Auth state, `instanceRole`, `externalSyncLockConfigured`, polling on/off, `paused`, `currentlyRunning`, `currentSync`, `localSyncState`, `expectedDurationMs.{single,cycle}`, last sync result, DB status, `msUntilNextXpCheck`, `msUntilNextNightlySync`, `syncMode` (`"baseline"`/`"fast"`), `fastIdleTicks`, `fastIdleTicksRequired`, **`nightlyHour`** (effective `0..23` in **R**), **`resolvedTimezone`** (IANA **R**), **`resolvedTimezoneSource`** (`settings` / `env` / `profile` / `system`), **`timezoneOverride`** (raw stored `app_settings.timezone_override`, `null` when unset), **`readOnly`** (`true` when role is read-only). Primary source for UI polling state. |
 | `/api/polling`     | `POST { action: "pause" | "resume" }`               | Toggle `userPaused`. Returns `{ paused, polling }`. 400 on invalid action. **503 `{ error: "read-only" }`** in read-only mode.                                                                       |
 | `/api/settings`    | `GET` / `POST`                                      | `GET` → `{ nightlyHour, timezoneOverride }` (effective `nightlyHour`, raw stored `timezoneOverride`). `POST { nightlyHour?: 0..23 \| null, timezoneOverride?: string \| null }` updates `app_settings`. Side effects: a `nightlyHour` change re-arms the nightly `setTimeout` via `rescheduleNightly()`; a `timezoneOverride` change calls `invalidateResolvedTimezone()` so R re-resolves on the next read. `timezoneOverride` is validated as a real IANA zone (via `Intl.DateTimeFormat`) — bogus strings → 400. 400 on any validation failure. **503 `{ error: "read-only" }`** in read-only mode. |
 | `/api/sync`        | `POST { force?: boolean, cycleAll?: boolean }`      | `force=false` (default): `manualRefresh` (respects cooldown + `isRunning`). `force=true`: direct `fullSync(client, cycleAll)`. **503 `{ error: "read-only" }`** in read-only mode.                  |
@@ -281,4 +324,3 @@ Pause does not: call Duolingo directly, touch the real Duolingo app or account, 
 - `**TESTING.md**` — what's covered, how to run, future test backlog.
 - `**README.md**` — user-facing setup and behavior.
 - `**CLAUDE.md**` / `**AGENTS.md**` — agent-oriented notes.
-

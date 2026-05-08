@@ -89,6 +89,10 @@ In this mode the process:
 
 Charts and history pages render exactly as on the writer instance. The DB file should be on shared storage or copied from the writer; SQLite WAL is concurrent-read-safe with one writer.
 
+### Manual test instance
+
+`DUOLINGO_INSTANCE_ROLE=manual` allows manual sync routes but disables the background baseline, fast-mode, and nightly timers. This is useful for a second test instance with its own DB. If two mutating instances use the same Duolingo account, configure the same `DUOLINGO_SYNC_LOCK_REDIS_URL` (and optionally `DUOLINGO_SYNC_LOCK_NAMESPACE`) on both so account-wide course switching is serialized across processes.
+
 ## Testing
 
 ```bash

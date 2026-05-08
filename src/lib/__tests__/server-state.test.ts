@@ -63,6 +63,7 @@ function loadServerState(): ServerStateModule {
 
 const originalJwt = process.env.DUOLINGO_JWT;
 const originalReadOnly = process.env.DUOLINGO_READ_ONLY;
+const originalRole = process.env.DUOLINGO_INSTANCE_ROLE;
 
 beforeEach(() => {
   jest.resetModules();
@@ -81,6 +82,11 @@ afterEach(() => {
     delete process.env.DUOLINGO_READ_ONLY;
   } else {
     process.env.DUOLINGO_READ_ONLY = originalReadOnly;
+  }
+  if (originalRole === undefined) {
+    delete process.env.DUOLINGO_INSTANCE_ROLE;
+  } else {
+    process.env.DUOLINGO_INSTANCE_ROLE = originalRole;
   }
   jest.resetModules();
   jest.dontMock("../polling");
@@ -216,6 +222,35 @@ describe("ensureClient", () => {
     const mod = loadServerState();
     mod.ensureClient();
 
+    expect(polling.startPolling).not.toHaveBeenCalled();
+  });
+
+  it("creates the client but does not start polling in manual mode", () => {
+    process.env.DUOLINGO_JWT = "test-jwt";
+    process.env.DUOLINGO_INSTANCE_ROLE = "manual";
+    const { polling, duolingo } = setupMocks();
+    const mod = loadServerState();
+
+    const client = mod.ensureClient();
+
+    expect(client).toBe(duolingo.client);
+    expect(duolingo.initClient).toHaveBeenCalledWith("test-jwt");
+    expect(polling.startPolling).not.toHaveBeenCalled();
+  });
+});
+
+describe("manual instance role", () => {
+  it("resumeUserPolling clears paused but never starts background polling", () => {
+    process.env.DUOLINGO_JWT = "test-jwt";
+    process.env.DUOLINGO_INSTANCE_ROLE = "manual";
+    const { polling } = setupMocks();
+    const mod = loadServerState();
+
+    mod.ensureClient();
+    mod.pauseUserPolling();
+    mod.resumeUserPolling();
+
+    expect(mod.isUserPaused()).toBe(false);
     expect(polling.startPolling).not.toHaveBeenCalled();
   });
 });

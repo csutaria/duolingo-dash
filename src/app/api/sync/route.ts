@@ -3,6 +3,7 @@ import { ensureClient } from "@/lib/server-state";
 import { manualRefresh, notifyAllCourseSyncComplete } from "@/lib/polling";
 import { fullSync } from "@/lib/sync";
 import { isReadOnlyMode } from "@/lib/read-only";
+import { tryAcquireAccountSyncGate } from "@/lib/sync-lock";
 
 export async function POST(request: Request) {
   if (isReadOnlyMode()) {
@@ -16,12 +17,25 @@ export async function POST(request: Request) {
 
     let result;
     if (force) {
-      result = await fullSync(client, cycleAll);
-      notifyAllCourseSyncComplete();
+      const gate = await tryAcquireAccountSyncGate(client);
+      if (!gate.acquired) {
+        return NextResponse.json({
+          type: "skipped",
+          changed: false,
+          totalXp: 0,
+          error: gate.reason,
+          timestamp: new Date().toISOString(),
+        });
+      }
+      try {
+        result = await fullSync(client, cycleAll);
+      } finally {
+        await gate.release();
+      }
     } else {
       result = await manualRefresh(client);
-      notifyAllCourseSyncComplete();
     }
+    if (result.type === "full") notifyAllCourseSyncComplete();
 
     return NextResponse.json(result);
   } catch (err) {
