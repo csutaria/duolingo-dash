@@ -49,6 +49,10 @@ Open [http://localhost:3000](http://localhost:3000).
 
 The JWT lives in the server process memory only. It is never written to disk.
 
+Next.js dev mode only trusts `localhost` by default. This app also allows
+`127.0.0.1`; for any other dev hostname, set `NEXT_ALLOWED_DEV_ORIGINS` to a
+comma- or space-separated list of hostnames before starting `npm run dev`.
+
 ## What it does while running
 
 The dashboard's goal is simple: stay current without interrupting you while you practice. An all-course cycle sync temporarily switches your active Duolingo course, so it's designed to only run when you're not actively earning XP.
