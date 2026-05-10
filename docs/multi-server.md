@@ -8,6 +8,23 @@ of process memory before a true multi-instance writer topology
 becomes viable, and to give a quick "this works / this doesn't"
 answer for the topologies people might try in the meantime.
 
+## Quick recommendations
+
+- **One normal server:** run the default `writer` role. No extra lock
+  configuration is needed.
+- **Multiple browsers/devices hitting that one server:** supported. Sync
+  mutations are single-flight inside the writer process.
+- **Display-only second process:** use `DUOLINGO_READ_ONLY=1` or
+  `DUOLINGO_INSTANCE_ROLE=read-only`.
+- **Second process that can sync manually:** use
+  `DUOLINGO_INSTANCE_ROLE=manual` and configure the same
+  `DUOLINGO_SYNC_LOCK_REDIS_URL` on every mutating process. Set
+  `DUOLINGO_SYNC_LOCK_NAMESPACE` too if one Redis/Valkey serves multiple
+  unrelated accounts or deployments.
+- **Multiple background writers:** discouraged. The Redis/Valkey account lock
+  serializes sync mutations, but each writer still has its own timers,
+  cooldowns, and account-quiet state.
+
 ## Status today
 
 | Topology                                            | Supported?              | Notes                                                                                                                                                                                                                                                                                                                                                                                          |

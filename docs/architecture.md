@@ -156,7 +156,9 @@ NIGHTLY_HOUR_DEFAULT (= 23) ─────┘
 ## Instance roles
 
 Dash has three server roles. `DUOLINGO_READ_ONLY=1` is still supported
-and maps to the `read-only` role.
+and maps to the `read-only` role. For user-facing recommendations on which
+role to run and when to configure Redis/Valkey locking, see `README.md`
+§ "Instance roles and sync locking".
 
 | Role | Env | Behavior |
 | --- | --- | --- |

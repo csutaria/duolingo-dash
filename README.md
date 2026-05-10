@@ -98,9 +98,41 @@ In this mode the process:
 
 Charts and history pages render exactly as on the writer instance. The DB file should be on shared storage or copied from the writer; SQLite WAL is concurrent-read-safe with one writer.
 
-### Manual test instance
+### Instance roles and sync locking
 
-`DUOLINGO_INSTANCE_ROLE=manual` allows manual sync routes but disables the background baseline, fast-mode, and nightly timers. This is useful for a second test instance with its own DB. If two mutating instances use the same Duolingo account, configure the same `DUOLINGO_SYNC_LOCK_REDIS_URL` (and optionally `DUOLINGO_SYNC_LOCK_NAMESPACE`) on both so account-wide course switching is serialized across processes.
+Most installs should run exactly one normal server. That default role is
+`writer`: it serves the dashboard, runs the 30-minute XP checks, runs the
+quiet watcher, and runs the nightly sync. Multiple browsers or devices can
+open the same writer safely; sync mutations are single-flight inside that
+server process.
+
+If you run extra processes, choose the role deliberately:
+
+| Role | Env | Use when |
+| --- | --- | --- |
+| `writer` | default, or `DUOLINGO_INSTANCE_ROLE=writer` | This is the one normal syncing server. Background polling and nightly sync are enabled. |
+| `manual` | `DUOLINGO_INSTANCE_ROLE=manual` | A second test instance with its own DB that should allow manual syncs but should not run background polling or nightly timers. |
+| `read-only` | `DUOLINGO_INSTANCE_ROLE=read-only` or `DUOLINGO_READ_ONLY=1` | A display-only instance. No JWT client, no polling, no sync writes. |
+
+The shared cross-process resource is your Duolingo account's active course.
+If more than one process can sync with the same account, configure the same
+Redis/Valkey account lock on every mutating process:
+
+```bash
+DUOLINGO_SYNC_LOCK_REDIS_URL=redis://localhost:6379
+# Optional, useful when sharing one Redis across unrelated accounts/deploys:
+DUOLINGO_SYNC_LOCK_NAMESPACE=my-duolingo-account
+```
+
+When the external lock is configured, sync mutations acquire the local
+single-flight gate first, then the Redis/Valkey lock. If the external lock is
+busy or unavailable, Dash skips/fails the sync instead of risking overlapping
+course switches.
+
+The lock serializes sync mutations; it does not merge SQLite databases or make
+background timers cluster-aware. Prefer one `writer` plus `manual` or
+`read-only` extras. Multiple background writers on the same Duolingo account
+are still discouraged.
 
 ## Testing
 
