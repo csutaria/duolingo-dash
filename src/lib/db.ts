@@ -541,6 +541,35 @@ export function snapshotSkills(courseId: string, skills: Array<{ skill_id: strin
   tx();
 }
 
+export type StoredSkillSnapshot = {
+  skill_id: string;
+  skill_name: string;
+  learned: number;
+  strength: number;
+  words_json: string | null;
+  levels_finished: number;
+  coords_x: number;
+  coords_y: number;
+  dependencies_json: string | null;
+};
+
+export function getLatestStoredSkillSnapshots(courseId: string): StoredSkillSnapshot[] {
+  const db = getDb();
+  return db.prepare(`
+    SELECT
+      s.skill_id, s.skill_name, s.learned, s.strength, s.words_json,
+      s.levels_finished, s.coords_x, s.coords_y, s.dependencies_json
+    FROM skill_snapshots s
+    INNER JOIN (
+      SELECT MAX(snapshot_time) AS max_time
+      FROM skill_snapshots
+      WHERE course_id = ?
+    ) latest ON s.snapshot_time = latest.max_time
+    WHERE s.course_id = ?
+    ORDER BY s.coords_y ASC, s.coords_x ASC
+  `).all(courseId, courseId) as StoredSkillSnapshot[];
+}
+
 export function upsertAchievements(achievements: Array<{ achievement_id: string; name: string; description?: string; tier?: number; is_completed: boolean }>): void {
   const db = getDb();
   const stmt = db.prepare(`

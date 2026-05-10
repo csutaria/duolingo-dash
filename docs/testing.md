@@ -20,9 +20,11 @@ Contributor-facing reference for writing tests and planning new coverage. For th
 | `queries-windowing.test.ts`    | `getCourseXpHistory` / `getCourseXpDailyHistory` row-count windowing; ideal-anchor / `_pretrack` stacks; **timezone**: `LOCAL_DATE` bucketing vs UTC evening snapshots (PT regression), `getXpDaily(N)` window anchored in R (PT + IST regressions), UTC/IST control cases |
 | `tz.test.ts`                   | Resolved zone **R** priority (settings loader → `DUOLINGO_TZ` → profile loader → system), cache invalidation, settings-loader fallthrough on null/empty/throw, `formatLocalDate` boundaries (PT/IST/UTC), `epochMsForLocalTime` / DST round-trips |
 | `sync.test.ts`                 | Null-safe XP summary mapping, null date filtering, avatar URL protocol handling                                                          |
+| `sync-skill-progress.test.ts`  | Skill sync overlays path-derived completion onto live legacy skill words, and falls back to latest stored word maps when live legacy skills are empty |
 | `legacy-language-data.test.ts` | Resolving legacy `language_data` keys (`nb`/`no`, `zh`/`zs`, inner `language`, single-key fallback)                                      |
 | `scripts.test.ts`              | Writing system classification, script skill identification, Latin/non-Latin detection, skill categorization                              |
 | `language-names.test.ts`       | Language name and flag emoji lookup, unknown language fallbacks                                                                          |
+| `vocab-bundles.test.ts`        | Skill-bundle vocabulary model: status classification, defensive `words_json` parsing, course-order sorting, unique flat word rows with skill context |
 | `polling.test.ts`              | Refresh cooldown enforcement, XP change detection, first-sync trigger, `advanceSyncState` reducer, `msUntilNextLocalTime` (next 02:00 in **R**), HMR `globalThis` polling bucket |
 | `read-only.test.ts`            | `isReadOnlyMode()` truth table for `DUOLINGO_READ_ONLY` (1/true/yes → true; 0/false/no/empty/random → false), case insensitive |
 | `server-state.test.ts` (read-only block) | `ensureClient` throws read-only error before checking JWT and never starts polling; `getClientOrNull` returns null without constructing a client |

@@ -1,14 +1,22 @@
 "use client";
 
-import { use, useState, useCallback } from "react";
+import { use, useState, useCallback, useMemo } from "react";
 import { useData } from "@/lib/hooks";
 import { StatCard } from "@/components/StatCard";
 import { StrengthBar } from "@/components/StrengthBar";
 import { XpChart } from "@/components/XpChart";
 import { getScriptInfo, isScriptSkill } from "@/lib/scripts";
 import { getLanguageName, getLanguageFlag } from "@/lib/language-names";
-import { parseUtcDate } from "@/lib/utils";
 import { useSharedXpWindow, XP_WINDOW_OPTIONS } from "@/lib/xp-window";
+import {
+  buildVocabBundles,
+  buildVocabWordRows,
+  parseSkillWords,
+  sortBundlesByCourseOrder,
+  type VocabBundle,
+  type VocabBundleStatus,
+  type VocabWordRow,
+} from "@/lib/vocab-bundles";
 
 export default function CourseDetail({ params }: { params: Promise<{ courseId: string }> }) {
   const { courseId } = use(params);
@@ -73,6 +81,11 @@ export default function CourseDetail({ params }: { params: Promise<{ courseId: s
 
   const scriptSkills = skills?.filter((s) => isScriptSkill(String(s.skill_name), langCode)) ?? [];
   const contentSkills = skills?.filter((s) => !isScriptSkill(String(s.skill_name), langCode)) ?? [];
+  const vocabBundles = useMemo(
+    () => sortBundlesByCourseOrder(buildVocabBundles(skills ?? [])),
+    [skills],
+  );
+  const vocabWords = useMemo(() => buildVocabWordRows(vocabBundles), [vocabBundles]);
 
   const [xpRange, setXpRange] = useSharedXpWindow("30");
   const xpCutoff = xpRange !== "all" ? Date.now() - Number(xpRange) * 86_400_000 : undefined;
@@ -132,7 +145,7 @@ export default function CourseDetail({ params }: { params: Promise<{ courseId: s
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard label="Completed" value={`${completedSkills.length}/${skills?.length ?? 0}`} />
         <StatCard label="In Progress" value={inProgressSkills.length} />
-        <StatCard label="Words" value={vocab?.length ?? 0} />
+        <StatCard label="Words" value={vocabWords.length} />
         {scriptSkills.length > 0 && (
           <StatCard
             label="Script Skills"
@@ -200,7 +213,7 @@ export default function CourseDetail({ params }: { params: Promise<{ courseId: s
         </div>
       )}
 
-      {tab === "vocab" && <VocabTable vocab={vocab ?? []} />}
+      {tab === "vocab" && <VocabTable bundles={vocabBundles} words={vocabWords} />}
 
       {tab === "decay" && (
         <div className="space-y-6">
@@ -244,14 +257,13 @@ function SkillTable({ skills }: { skills: Array<Record<string, unknown>> }) {
               <th className="px-4 py-2">Skill</th>
               <th className="px-4 py-2">Status</th>
               <th className="px-4 py-2 text-right">Words</th>
-              <th className="px-4 py-2">First Tracked</th>
             </tr>
           </thead>
           <tbody>
             {sorted.map((s) => {
               const lf = Number(s.levels_finished || 0);
               const { label, classes } = crownStatus(lf);
-              const words = s.words_json ? JSON.parse(String(s.words_json)) : [];
+              const words = parseSkillWords(s.words_json);
               return (
                 <tr key={String(s.skill_id)} className="border-b border-zinc-800/50 hover:bg-zinc-800/30">
                   <td className="px-4 py-2 text-zinc-200 font-medium">{String(s.skill_name)}</td>
@@ -259,9 +271,6 @@ function SkillTable({ skills }: { skills: Array<Record<string, unknown>> }) {
                     <span className={`text-xs px-2 py-0.5 rounded ${classes}`}>{label}</span>
                   </td>
                   <td className="px-4 py-2 text-right text-zinc-400">{words.length}</td>
-                  <td className="px-4 py-2 text-xs text-zinc-500">
-                    {s.first_seen ? parseUtcDate(String(s.first_seen)).toLocaleDateString() : "—"}
-                  </td>
                 </tr>
               );
             })}
@@ -272,22 +281,17 @@ function SkillTable({ skills }: { skills: Array<Record<string, unknown>> }) {
   );
 }
 
-function VocabTable({ vocab }: { vocab: Array<Record<string, unknown>> }) {
-  const [sortBy, setSortBy] = useState<"strength" | "word">("strength");
+function VocabTable({ bundles, words }: { bundles: VocabBundle[]; words: VocabWordRow[] }) {
+  const [view, setView] = useState<"bundles" | "words">("bundles");
+  const [statusFilter, setStatusFilter] = useState<"all" | VocabBundleStatus>("all");
   const [filter, setFilter] = useState("");
 
-  const filtered = vocab.filter((w) =>
-    !filter || String(w.word).toLowerCase().includes(filter.toLowerCase()) || String(w.skill || "").toLowerCase().includes(filter.toLowerCase()),
-  );
-
-  const sorted = [...filtered].sort((a, b) => {
-    if (sortBy === "strength") return Number(a.strength_bars || 0) - Number(b.strength_bars || 0);
-    return String(a.word).localeCompare(String(b.word));
-  });
+  const filteredBundles = filterBundles(bundles, filter, statusFilter);
+  const filteredWords = filterWords(words, filter, statusFilter);
 
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-      <div className="flex items-center gap-3 px-4 py-2 border-b border-zinc-800">
+      <div className="flex items-center gap-3 px-4 py-2 border-b border-zinc-800 flex-wrap">
         <input
           type="text"
           placeholder="Filter words or skills..."
@@ -295,40 +299,108 @@ function VocabTable({ vocab }: { vocab: Array<Record<string, unknown>> }) {
           onChange={(e) => setFilter(e.target.value)}
           className="bg-zinc-800 text-zinc-200 text-sm px-3 py-1.5 rounded border border-zinc-700 focus:border-zinc-500 outline-none w-64"
         />
-        <span className="text-xs text-zinc-500">Sort:</span>
-        {(["strength", "word"] as const).map((s) => (
-          <button key={s} onClick={() => setSortBy(s)} className={`text-xs ${sortBy === s ? "text-zinc-200" : "text-zinc-500 hover:text-zinc-400"}`}>
-            {s}
-          </button>
-        ))}
-        <span className="text-xs text-zinc-500 ml-auto">{sorted.length} words</span>
+        <div className="flex gap-1">
+          {(["bundles", "words"] as const).map((v) => (
+            <button key={v} onClick={() => setView(v)} className={`text-xs px-2 py-1 rounded ${view === v ? "bg-zinc-700 text-zinc-100" : "text-zinc-500 hover:text-zinc-300"}`}>
+              {v === "bundles" ? "Bundles" : "All Words"}
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-1">
+          {(["all", "in-progress", "complete-plus", "complete", "untouched"] as const).map((s) => (
+            <button key={s} onClick={() => setStatusFilter(s)} className={`text-xs px-2 py-1 rounded ${statusFilter === s ? "bg-zinc-700 text-zinc-100" : "text-zinc-500 hover:text-zinc-300"}`}>
+              {s === "all" ? "All" : vocabStatusText(s)}
+            </button>
+          ))}
+        </div>
+        <span className="text-xs text-zinc-500 ml-auto">{view === "bundles" ? `${filteredBundles.length} skills` : `${filteredWords.length} words`}</span>
       </div>
-      <div className="max-h-[500px] overflow-y-auto">
-        <table className="w-full text-sm">
-          <thead className="sticky top-0 bg-zinc-900 border-b border-zinc-800">
-            <tr className="text-zinc-500 text-left">
-              <th className="px-4 py-2">Word</th>
-              <th className="px-4 py-2">Strength</th>
-              <th className="px-4 py-2">Skill</th>
-              <th className="px-4 py-2">First Tracked</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map((w, i) => (
-              <tr key={`${w.lexeme_id}-${i}`} className="border-b border-zinc-800/50 hover:bg-zinc-800/30">
-                <td className="px-4 py-2 text-zinc-200 font-medium">{String(w.word)}</td>
-                <td className="px-4 py-2"><StrengthBar value={Number(w.strength_bars || 0)} /></td>
-                <td className="px-4 py-2 text-zinc-400">{String(w.skill || "—")}</td>
-                <td className="px-4 py-2 text-xs text-zinc-500">
-                  {w.first_seen ? parseUtcDate(String(w.first_seen)).toLocaleDateString() : "—"}
-                </td>
+      {view === "bundles" ? (
+        <div className="max-h-[500px] overflow-y-auto divide-y divide-zinc-800/60">
+          {filteredBundles.map((bundle) => (
+            <div key={bundle.skillId} className="px-4 py-3 hover:bg-zinc-800/30">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h4 className="font-medium text-zinc-100">{bundle.skillName}</h4>
+                    <VocabStatusBadge status={bundle.status} label={bundle.statusLabel} />
+                  </div>
+                  <p className="text-xs text-zinc-500 mt-1">{bundle.levelsFinished}/5 status · {bundle.wordCount} words</p>
+                </div>
+              </div>
+              <p className="text-sm text-zinc-300 mt-2 leading-7 break-words">
+                {bundle.words.length > 0 ? bundle.words.join(" · ") : "No words stored for this skill."}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="max-h-[500px] overflow-y-auto">
+          <table className="w-full text-sm">
+            <thead className="sticky top-0 bg-zinc-900 border-b border-zinc-800">
+              <tr className="text-zinc-500 text-left">
+                <th className="px-4 py-2">Word</th>
+                <th className="px-4 py-2">Skills</th>
+                <th className="px-4 py-2">Status</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {filteredWords.map((row) => (
+                <tr key={row.word} className="border-b border-zinc-800/50 hover:bg-zinc-800/30">
+                  <td className="px-4 py-2 text-zinc-200 font-medium">{row.word}</td>
+                  <td className="px-4 py-2 text-zinc-400">{row.skills.map((skill) => skill.skillName).join(", ")}</td>
+                  <td className="px-4 py-2"><VocabStatusBadge status={row.strongestStatus} label={row.strongestStatusLabel} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
+}
+
+function VocabStatusBadge({ status, label }: { status: VocabBundleStatus; label: string }) {
+  const classes =
+    status === "complete-plus" ? "bg-yellow-900/50 text-yellow-300" :
+    status === "complete" ? "bg-green-900/50 text-green-400" :
+    status === "in-progress" ? "bg-blue-900/40 text-blue-400" :
+    "bg-zinc-800 text-zinc-500";
+
+  return <span className={`text-xs px-2 py-0.5 rounded ${classes}`}>{label}</span>;
+}
+
+function filterBundles(
+  bundles: VocabBundle[],
+  filter: string,
+  statusFilter: "all" | VocabBundleStatus,
+): VocabBundle[] {
+  const q = filter.trim().toLowerCase();
+  return bundles.filter((bundle) => {
+    if (statusFilter !== "all" && bundle.status !== statusFilter) return false;
+    if (!q) return true;
+    return bundle.skillName.toLowerCase().includes(q) || bundle.words.some((word) => word.toLowerCase().includes(q));
+  });
+}
+
+function filterWords(
+  words: VocabWordRow[],
+  filter: string,
+  statusFilter: "all" | VocabBundleStatus,
+): VocabWordRow[] {
+  const q = filter.trim().toLowerCase();
+  return words.filter((row) => {
+    if (statusFilter !== "all" && !row.skills.some((skill) => skill.status === statusFilter)) return false;
+    if (!q) return true;
+    return row.word.toLowerCase().includes(q) || row.skills.some((skill) => skill.skillName.toLowerCase().includes(q));
+  });
+}
+
+function vocabStatusText(status: VocabBundleStatus): string {
+  if (status === "complete-plus") return "Complete+";
+  if (status === "complete") return "Complete";
+  if (status === "in-progress") return "In Progress";
+  return "Untouched";
 }
 
 function DecaySection({
