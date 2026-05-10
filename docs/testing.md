@@ -6,7 +6,8 @@ Contributor-facing reference for writing tests and planning new coverage. For th
 
 - Runner: Jest + `ts-jest` (`jest.config.ts`).
 - Environment: `node`. **No jsdom / React Testing Library** — UI-level tests are intentionally deferred (see Backlog → Deferred).
-- Tests live under `src/lib/__tests__/`.
+- Library tests live under `src/lib/__tests__/`; route handler tests live beside
+  their route under `src/app/api/**/__tests__/`.
 - Module alias: `@/…` maps to `src/…` (jest + tsconfig).
 
 ## Current coverage
@@ -35,7 +36,8 @@ Contributor-facing reference for writing tests and planning new coverage. For th
 | `src/app/api/sync/__tests__/route.test.ts` | POST `/api/sync`: `DUOLINGO_READ_ONLY` (`1`/`true`/`yes`) → 503 `{ error: "read-only" }` and never invokes `ensureClient`/`fullSync`/`manualRefresh`; normal mode dispatches `manualRefresh` vs `fullSync(_, cycleAll)` correctly; local/external busy force-sync returns skipped without calling `fullSync`; active-course conflict results do not send completion notification |
 | `src/app/api/sync-course/__tests__/route.test.ts` | POST `/api/sync-course`: 503 in read-only without touching the writer path; 400 on missing required params; local/external busy writer returns skipped/error shape without calling `syncCourseDetails`; active-course conflict results preserve `switchedBack: false` |
 | `src/app/api/polling/__tests__/route.test.ts` (read-only block) | POST `/api/polling`: 503 `{ error: "read-only" }` in read-only mode without touching pause/resume/ensureClient |
-| `app-settings.test.ts` | `getAppSettings` / `updateAppSettings`: NULL-default fallthrough for fresh row, missing row, missing table; partial-field updates; `null` resets a field; empty-partial no-op. `effectiveNightlyHour`: NULL → `NIGHTLY_HOUR_DEFAULT` (2); valid 0..23 read-through; out-of-range / non-integer / DB-missing fallback to default |
+| `src/app/api/status/__tests__/route.test.ts` | GET `/api/status`: writer payload forwards account-quiet / course-conflict timing state and expected durations; read-only payload preserves the inactive sync-state shape without constructing a client |
+| `app-settings.test.ts` | `getAppSettings` / `updateAppSettings`: NULL-default fallthrough for fresh row, missing row, missing table; partial-field updates; `null` resets a field; empty-partial no-op. `effectiveNightlyHour`: NULL → `NIGHTLY_HOUR_DEFAULT` (23); valid 0..23 read-through; out-of-range / non-integer / DB-missing fallback to default |
 | `src/app/api/settings/__tests__/route.test.ts` | GET `/api/settings`: returns effective `nightlyHour` + stored `timezoneOverride`. POST `nightlyHour`: integer 0..23 or null (boundary checks); `null` resets to default; non-integer / out-of-range / non-numeric → 400 with no DB write; change calls `rescheduleNightly()`; **does NOT** call `invalidateResolvedTimezone()`. POST `timezoneOverride`: valid IANA → 200 + DB write + `invalidateResolvedTimezone()` + **does NOT** reschedule; trims whitespace; null/empty/whitespace → reset + still invalidates cache; invalid IANA name (`Mars/Olympus_Mons`, `not_a_zone`, numbers, booleans) → 400 with no DB write or invalidate. POST body: empty body → 400; invalid JSON → 400. **Read-only mode** → 503 `{ error: "read-only" }` for both fields with no DB write, no reschedule, no invalidate |
 
 
@@ -148,16 +150,16 @@ Contributors changing chart components (`DailyMetricChart`, `StackedXpChart`, `X
 ### Deferred
 
 - `SyncBar` React component — `pinned`/`suppressed` state transitions, indicator color for paused / syncing / paused+syncing, progress bar render paths (known + unknown duration), Read-only badge / hidden write-button branches. Blocked on adding jsdom + RTL.
-- `/api/status` response shape — snapshot-style assertion that the UI's expected fields are always present.
 
 **Done (chart API wiring + write-route guards):**
 
 - [x] GET `/api/data` — `course-xp-history` / `course-xp-daily-history` query dispatch (`src/app/api/data/__tests__/route.test.ts`).
 - [x] POST `/api/sync` and `/api/sync-course` handler-level tests, with read-only 503 guards.
+- [x] GET `/api/status` response shape — account-quiet/course-conflict fields for writer mode and inactive sentinels for read-only mode (`src/app/api/status/__tests__/route.test.ts`).
 
 ## Writing a new test — checklist
 
-1. File lives in `src/lib/__tests__/`, named after the module it covers.
+1. Library tests live in `src/lib/__tests__/`, named after the module they cover. Route handler tests live beside the route under `src/app/api/**/__tests__/`.
 2. If the module-under-test uses top-level `let`, reach for `jest.isolateModules`.
 3. If you need a DB, construct an in-memory `better-sqlite3` and run the same migrations `initSchema()` runs — don't hand-roll divergent DDL.
 4. If the test spins up any timers (e.g. `setInterval`), use Jest's fake timers or make sure to `stopPolling()` in `afterEach`.

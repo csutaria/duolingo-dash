@@ -60,7 +60,7 @@ Legend:
 - Active-course coupling is structural:
   - vocab/legacy skill detail retrieval is course-context dependent and tied to switching (`docs/api-map.md`, `src/lib/sync.ts`).
 - Polling uses all-course syncing with account-wide course switching, but gates it on user inactivity:
-  - `src/lib/polling.ts` runs a 30-min XP check, escalates to 2-min fast polls on change, and only fires `fullSync(client, true)` after 10 min of quiet (plus a single nightly at 02:00 local for idle-day coverage).
+  - `src/lib/polling.ts` runs a 30-min XP check, escalates to 2-min fast polls on change, and only fires `fullSync(client, true)` after 10 min of quiet (plus a single nightly at the configured local hour for idle-day coverage).
 - Current vocab read path conflates "known" with "available":
   - `getVocabLatest()` falls back to `getVocabFromSkills()` (unfiltered curriculum words) in `src/lib/queries.ts`.
 

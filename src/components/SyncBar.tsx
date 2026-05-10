@@ -479,7 +479,7 @@ export function SyncBar() {
   const syncMode = ((status?.syncMode as SyncMode | undefined) ?? "baseline") as SyncMode;
   const fastIdleTicks = (status?.fastIdleTicks as number | undefined) ?? 0;
   const fastIdleTicksRequired = (status?.fastIdleTicksRequired as number | undefined) ?? 5;
-  const serverNightlyHour = (status?.nightlyHour as number | undefined) ?? 2;
+  const serverNightlyHour = (status?.nightlyHour as number | undefined) ?? 23;
   // Optimistically reflect the user's selection so the dropdown doesn't
   // visually snap back during the ~1s round-trip; clears when the server
   // confirms (poll loop refreshes status every 5s, plus the post-update

@@ -31,7 +31,7 @@ Browser (Next.js client) ─► Next.js API routes (server) ─► duolingo.com
 3. **Account-quiet detector (fast mode)**: when baseline sees XP changed vs last full sync, start polling account state every 2 min.
    - Any observed XP or active-course change resets the quiet counter.
    - 5 consecutive unchanged account observations (10 min of quiet) → wait jitter, re-check account state, then attempt `fullSync(cycleAll=true)`.
-4. **Nightly once at the configured hour in the resolved timezone (R).** Default `02:00`; configurable via the SyncBar selector (persisted to `app_settings.nightly_hour`). Nightly seeds the same account-quiet detector instead of bypassing it, so automatic cycle-all has one readiness gate regardless of trigger.
+4. **Nightly once at the configured hour in the resolved timezone (R).** Default `23:00`; configurable via the SyncBar selector (persisted to `app_settings.nightly_hour`). Nightly seeds the same account-quiet detector instead of bypassing it, so automatic cycle-all has one readiness gate regardless of trigger.
 5. **Pause** stops all three: baseline, fast, nightly. Pause is in-memory only — process restart always resumes polling.
 6. **HMR safety**: all mutable polling state lives on a shared `globalThis.__duolingoPollingState` bucket so Next.js dev reloads don't orphan timers.
 7. **Single-flight**: `isRunning` on the shared bucket, claimed through
@@ -51,7 +51,7 @@ Browser (Next.js client) ─► Next.js API routes (server) ─► duolingo.com
 | `baselineTimer`                                                 | 30-min `setInterval` handle                                | Yes                       |
 | `fastTimer`                                                     | 2-min account-quiet `setInterval` handle (`mode === "fast"` or `"course_conflict"`) | Yes                       |
 | `accountQuietJitterTimer`                                       | 30-120 s jitter `setTimeout` before automatic cycle retry  | Yes                       |
-| `nightlyTimer`                                                  | Next 02:00 `setTimeout` handle (chained)                   | Yes                       |
+| `nightlyTimer`                                                  | Next configured-hour `setTimeout` handle (chained)         | Yes                       |
 | `isRunning`                                                     | Global single-flight mutex                                 | Yes                       |
 | `mode`                                                          | `"baseline"`, `"fast"`, or `"course_conflict"`             | Yes                       |
 | `fastLastObservedXp` / `fastConsecutiveIdleTicks` / `accountQuietLastObservedCourseId` / `automaticCycleReason` | Account-quiet bookkeeping | Yes                       |
@@ -86,9 +86,9 @@ Rules:
 
 ### UTC-host deployment note
 
-If you deploy on a server configured to UTC, that only fixes **S**. It does **not** automatically mean "02:00 in your local timezone."
+If you deploy on a server configured to UTC, that only fixes **S**. It does **not** automatically mean "23:00 in your local timezone."
 
-- Without an override, `DUOLINGO_TZ`, or a persisted profile timezone, `R` falls through to `S=UTC` and nightly runs happen at **02:00 UTC**.
+- Without an override, `DUOLINGO_TZ`, or a persisted profile timezone, `R` falls through to `S=UTC` and nightly runs happen at **23:00 UTC**.
 - The fastest fix without a redeploy is the SyncBar "Override" input: set it to your IANA zone (e.g. `America/Los_Angeles`) and the resolver, the nightly scheduler, and every "which day" query pick it up immediately. Persisted in `app_settings.timezone_override`; survives process restarts.
 - For headless / pre-login configuration, set `DUOLINGO_TZ=America/Los_Angeles` in the environment.
 
@@ -125,7 +125,7 @@ Single-row (`id = 1`) SQLite table for user-editable preferences. Helpers in `sr
 
 | Column              | Type      | Default fallthrough                                | Consumer                                              |
 | ------------------- | --------- | -------------------------------------------------- | ----------------------------------------------------- |
-| `nightly_hour`      | INTEGER 0..23 | `null` → 2 (legacy `NIGHTLY_HOUR_DEFAULT`)         | `effectiveNightlyHour()` in `polling.ts`              |
+| `nightly_hour`      | INTEGER 0..23 | `null` → 23 (`NIGHTLY_HOUR_DEFAULT`)               | `effectiveNightlyHour()` in `polling.ts`              |
 | `timezone_override` | TEXT (IANA)   | `null` → resolver chain (env → profile → host)     | `setSettingsTimezoneLoader()` in `tz.ts` (top of priority chain) |
 | `updated_at`        | TEXT      | `datetime('now')`                                  | Audit only                                            |
 
@@ -144,10 +144,10 @@ Notes:
 ```
 app_settings.nightly_hour (UI)  ─┐
                                  ├─► effectiveNightlyHour()  ──►  msUntilNextLocalTime(h, R)
-NIGHTLY_HOUR_DEFAULT (= 2)  ─────┘
+NIGHTLY_HOUR_DEFAULT (= 23) ─────┘
 ```
 
-- `effectiveNightlyHour()` validates the stored value is an integer in `0..23`; out-of-range / non-integer / DB-missing → `NIGHTLY_HOUR_DEFAULT` (2).
+- `effectiveNightlyHour()` validates the stored value is an integer in `0..23`; out-of-range / non-integer / DB-missing → `NIGHTLY_HOUR_DEFAULT` (23).
 - The hour is interpreted in **R** (resolved zone), not S — see `msUntilNextLocalTime` and the Timezone model section above. Changing the hour does **not** change the zone.
 - `POST /api/settings { "nightlyHour": 7 }` triggers `updateAppSettings({ nightly_hour: 7 })` then `rescheduleNightly()`. The latter no-ops if there is no live client (e.g. paused before resume).
 - `GET /api/status` reports the effective hour as `nightlyHour` (always present in non-DEMO responses, including read-only). The UI surfaces it as a `<select>` next to "Next nightly sync" in the SyncBar status panel.
@@ -258,7 +258,7 @@ Logging:
 ```
   startPolling(client)
   ├── setInterval(baselineTick, 30m)
-  ├── setTimeout(nightlyTick, msUntilNextLocalTime(2))      // next 02:00 in R; chained
+  ├── setTimeout(nightlyTick, msUntilNextLocalTime(effectiveNightlyHour())) // next configured hour in R; chained
   ├── (fastTimer armed on demand when baseline detects change)
   └── if (!isRunning && currentSync == null) kickoff baselineTick
 ```

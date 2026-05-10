@@ -45,10 +45,10 @@ export const FAST_POLL_MS = 2 * 60 * 1000;
 export const FAST_IDLE_TRIGGER_TICKS = 5;
 export const ACCOUNT_QUIET_JITTER_MIN_MS = 30 * 1000;
 export const ACCOUNT_QUIET_JITTER_MAX_MS = 120 * 1000;
-// Nightly: single sync at 02:00 in resolved zone (R) by default.
+// Nightly: single sync at 23:00 in resolved zone (R) by default.
 // `effectiveNightlyHour()` reads `app_settings.nightly_hour` at scheduling
 // time so a UI change re-arms the next setTimeout without a process restart.
-export const NIGHTLY_HOUR_DEFAULT = 2;
+export const NIGHTLY_HOUR_DEFAULT = 23;
 /** @deprecated kept as the documented default; runtime should call `effectiveNightlyHour()`. */
 export const NIGHTLY_HOUR_LOCAL = NIGHTLY_HOUR_DEFAULT;
 
@@ -415,7 +415,7 @@ export async function __runNightlyTickForTests(client: DuolingoClient): Promise<
 }
 
 /**
- * Runs at 02:00 local time. Decision logic:
+ * Runs at the configured local time. Decision logic:
  *  - If isRunning → skip and re-arm. (Quiet-detector / manual is already
  *    taking care of things.)
  *  - Else quickCheck to seed account-quiet monitoring cheaply.
