@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useData } from "@/lib/hooks";
 import { getLanguageName, getLanguageFlag } from "@/lib/language-names";
+import { choosePreferredCourseId, readLastCourseId, writeLastCourseId } from "@/lib/course-preferences";
 import {
   buildVocabBundles,
   buildVocabWordRows,
@@ -20,9 +21,32 @@ const STATUS_ORDER: VocabBundleStatus[] = ["in-progress", "complete-plus", "comp
 
 export default function VocabPage() {
   const { data: courses } = useData<Array<Record<string, unknown>>>("courses");
+  const { data: profile, loading: profileLoading } = useData<Record<string, unknown>>("profile");
   const [selectedCourse, setSelectedCourse] = useState<string | null>(null);
+  const [selectionReady, setSelectionReady] = useState(false);
 
-  const courseId = selectedCourse ?? (courses?.[0]?.course_id as string | undefined) ?? null;
+  useEffect(() => {
+    if (!courses || profileLoading) return;
+    const courseIds = courses.map((c) => String(c.course_id));
+    const storedCourse = readLastCourseId(courseIds);
+    const activeCourse =
+      typeof profile?.current_course_id === "string" && courseIds.includes(profile.current_course_id)
+        ? profile.current_course_id
+        : null;
+    setSelectedCourse((current) => (
+      current && courseIds.includes(current)
+        ? current
+        : choosePreferredCourseId(courseIds, storedCourse, activeCourse)
+    ));
+    setSelectionReady(true);
+  }, [courses, profile, profileLoading]);
+
+  const courseId = selectionReady ? selectedCourse : null;
+
+  const selectCourse = (nextCourseId: string) => {
+    setSelectedCourse(nextCourseId);
+    writeLastCourseId(nextCourseId);
+  };
 
   return (
     <div className="space-y-6">
@@ -40,7 +64,7 @@ export default function VocabPage() {
               return (
                 <button
                   key={String(c.course_id)}
-                  onClick={() => setSelectedCourse(String(c.course_id))}
+                  onClick={() => selectCourse(String(c.course_id))}
                   className={`px-3 py-1.5 rounded text-sm transition-colors ${
                     isActive ? "bg-zinc-700 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800"
                   }`}
@@ -53,7 +77,9 @@ export default function VocabPage() {
         )}
       </div>
 
-      {courseId ? <VocabContent courseId={courseId} /> : (
+      {!courses || !selectionReady ? (
+        <p className="text-zinc-500">Loading...</p>
+      ) : courseId ? <VocabContent courseId={courseId} /> : (
         <p className="text-zinc-500">No courses found. Sync data first.</p>
       )}
     </div>

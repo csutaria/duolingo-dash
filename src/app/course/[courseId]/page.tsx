@@ -1,13 +1,13 @@
 "use client";
 
-import { use, useState, useCallback, useMemo } from "react";
+import { use, useState, useCallback, useMemo, useEffect } from "react";
 import { useData } from "@/lib/hooks";
 import { StatCard } from "@/components/StatCard";
-import { StrengthBar } from "@/components/StrengthBar";
 import { XpChart } from "@/components/XpChart";
 import { getScriptInfo, isScriptSkill } from "@/lib/scripts";
 import { getLanguageName, getLanguageFlag } from "@/lib/language-names";
 import { useSharedXpWindow, XP_WINDOW_OPTIONS } from "@/lib/xp-window";
+import { writeLastCourseId } from "@/lib/course-preferences";
 import {
   buildVocabBundles,
   buildVocabWordRows,
@@ -21,12 +21,9 @@ import {
 export default function CourseDetail({ params }: { params: Promise<{ courseId: string }> }) {
   const { courseId } = use(params);
   const decodedCourseId = decodeURIComponent(courseId);
-  const [tab, setTab] = useState<"skills" | "vocab" | "decay">("skills");
+  const [tab, setTab] = useState<"skills" | "vocab">("skills");
 
   const { data: skills, refetch: refetchSkills } = useData<Array<Record<string, unknown>>>("skills", { courseId: decodedCourseId });
-  const { data: vocab, refetch: refetchVocab } = useData<Array<Record<string, unknown>>>("vocab", { courseId: decodedCourseId });
-  const { data: skillDecay, refetch: refetchSkillDecay } = useData<Array<Record<string, unknown>>>("skill-decay", { courseId: decodedCourseId });
-  const { data: vocabDecay, refetch: refetchVocabDecay } = useData<Array<Record<string, unknown>>>("vocab-decay", { courseId: decodedCourseId });
   const { data: courseHistory } = useData<Array<Record<string, unknown>>>("course-history", { courseId: decodedCourseId });
   const { data: courses } = useData<Array<Record<string, unknown>>>("courses");
   const [syncing, setSyncing] = useState(false);
@@ -41,7 +38,11 @@ export default function CourseDetail({ params }: { params: Promise<{ courseId: s
   const courseFrom = courseInfo ? String(courseInfo.from_language) : "en";
   const scriptInfo = getScriptInfo(courseLang);
 
-  const hasDetailData = (skills && skills.length > 0) || (vocab && vocab.length > 0);
+  const hasDetailData = skills && skills.length > 0;
+
+  useEffect(() => {
+    writeLastCourseId(decodedCourseId);
+  }, [decodedCourseId]);
 
   const syncThisCourse = useCallback(async () => {
     setSyncing(true);
@@ -62,16 +63,13 @@ export default function CourseDetail({ params }: { params: Promise<{ courseId: s
       } else {
         setSyncDone(true);
         refetchSkills();
-        refetchVocab();
-        refetchSkillDecay();
-        refetchVocabDecay();
       }
     } catch (err) {
       setSyncError(err instanceof Error ? err.message : "Sync failed");
     } finally {
       setSyncing(false);
     }
-  }, [decodedCourseId, courseLang, courseFrom, refetchSkills, refetchVocab, refetchSkillDecay, refetchVocabDecay]);
+  }, [decodedCourseId, courseLang, courseFrom, refetchSkills]);
 
   const completedSkills = skills?.filter((s) => Number(s.levels_finished || 0) >= 5) ?? [];
   const inProgressSkills = skills?.filter((s) => {
@@ -108,7 +106,6 @@ export default function CourseDetail({ params }: { params: Promise<{ courseId: s
   const tabs = [
     { id: "skills" as const, label: "Skills" },
     { id: "vocab" as const, label: "Vocabulary" },
-    { id: "decay" as const, label: "Decay" },
   ];
 
   return (
@@ -214,13 +211,6 @@ export default function CourseDetail({ params }: { params: Promise<{ courseId: s
       )}
 
       {tab === "vocab" && <VocabTable bundles={vocabBundles} words={vocabWords} />}
-
-      {tab === "decay" && (
-        <div className="space-y-6">
-          <DecaySection title="Skill Decay" data={skillDecay ?? []} nameKey="skill_name" strengthKey="current_strength" />
-          <DecaySection title="Vocabulary Decay" data={vocabDecay ?? []} nameKey="word" strengthKey="current_strength" />
-        </div>
-      )}
     </div>
   );
 }
@@ -401,55 +391,4 @@ function vocabStatusText(status: VocabBundleStatus): string {
   if (status === "complete") return "Complete";
   if (status === "in-progress") return "In Progress";
   return "Untouched";
-}
-
-function DecaySection({
-  title,
-  data,
-  nameKey,
-  strengthKey,
-}: {
-  title: string;
-  data: Array<Record<string, unknown>>;
-  nameKey: string;
-  strengthKey: string;
-}) {
-  const decaying = data.filter((d) => Number(d.decay || 0) < 0);
-  const improving = data.filter((d) => Number(d.decay || 0) > 0);
-  const stable = data.filter((d) => Number(d.decay || 0) === 0);
-
-  return (
-    <div>
-      <h4 className="text-md font-semibold mb-2">{title}</h4>
-      <div className="grid grid-cols-3 gap-3 mb-3">
-        <StatCard label="Decaying" value={decaying.length} />
-        <StatCard label="Improving" value={improving.length} />
-        <StatCard label="Stable" value={stable.length} />
-      </div>
-      {decaying.length > 0 && (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-          <div className="px-4 py-2 border-b border-zinc-800 text-xs text-red-400 font-medium">
-            Needs Practice ({decaying.length})
-          </div>
-          <div className="max-h-64 overflow-y-auto">
-            <table className="w-full text-sm">
-              <tbody>
-                {decaying.map((d, i) => (
-                  <tr key={i} className="border-b border-zinc-800/50">
-                    <td className="px-4 py-1.5 text-zinc-200">{String(d[nameKey])}</td>
-                    <td className="px-4 py-1.5">
-                      <StrengthBar value={Number(d[strengthKey] || 0)} />
-                    </td>
-                    <td className="px-4 py-1.5 text-xs text-red-400">
-                      {Number(d.decay) < 0 ? String(Number(d.decay).toFixed(0)) : "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-    </div>
-  );
 }
