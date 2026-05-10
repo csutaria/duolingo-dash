@@ -60,7 +60,7 @@ const panelBase =
 const panelShown = "pointer-events-auto visible opacity-100";
 const panelHidden = "pointer-events-none invisible opacity-0";
 
-type SyncMode = "baseline" | "fast";
+type SyncMode = "baseline" | "fast" | "course_conflict";
 
 function sourceLabel(source: string): string {
   if (source === "settings") return "override";
@@ -217,9 +217,10 @@ function SyncStatusPanel({
   currentSync: CurrentSync | null;
   expectedMsForCurrent: number | null;
 }) {
+  const watchingAccount = syncMode === "fast" || syncMode === "course_conflict";
   const idleText =
-    syncMode === "fast"
-      ? "Watching — checking every 2m"
+    watchingAccount
+      ? "Watching account — checking every 2m"
       : "Idle — XP check every 30m";
 
   const stateLabel = readOnly
@@ -239,7 +240,7 @@ function SyncStatusPanel({
   const xpCheckMin = msUntilNextXpCheck != null ? ceilMin(msUntilNextXpCheck) : null;
   const nightlyMin = msUntilNextNightlySync != null ? ceilMin(msUntilNextNightlySync) : null;
   const quietRemainingMin =
-    syncMode === "fast"
+    watchingAccount
       ? Math.max(0, fastIdleTicksRequired - fastIdleTicks) * 2
       : null;
 
@@ -294,7 +295,7 @@ function SyncStatusPanel({
                       : "— (pending first check)"}
               </dd>
             </div>
-            {syncMode === "fast" && quietRemainingMin != null && (
+            {watchingAccount && quietRemainingMin != null && (
               <div className="flex gap-2">
                 <dt className="shrink-0 text-zinc-500">Full sync if quiet</dt>
                 <dd className="tabular-nums text-zinc-300">
@@ -555,7 +556,7 @@ export function SyncBar() {
         ? "text-yellow-400"
         : paused || !pollingOn
           ? "text-red-500"
-          : syncMode === "fast"
+          : syncMode === "fast" || syncMode === "course_conflict"
             ? "text-yellow-400"
             : "text-green-500";
 
@@ -576,8 +577,8 @@ export function SyncBar() {
               ? "Polling off"
               : currentlyRunning
                 ? "Syncing…"
-                : syncMode === "fast"
-                  ? "Watching XP"
+                : syncMode === "fast" || syncMode === "course_conflict"
+                  ? "Watching account"
                   : nextCheckMin != null && nextCheckMin > 0
                     ? `Check in ~${nextCheckMin}m`
                     : "Polling";

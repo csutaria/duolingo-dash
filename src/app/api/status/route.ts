@@ -28,6 +28,19 @@ export async function GET() {
       resolvedTimezone: getResolvedTimezone(),
       resolvedTimezoneSource: getResolvedTimezoneSource(),
       timezoneOverride: null,
+      courseConflict: {
+        active: false,
+        lastObservedCourseId: null,
+        jitterUntilMs: null,
+        msUntilJitterRetry: null,
+      },
+      accountQuiet: {
+        active: false,
+        reason: null,
+        lastObservedCourseId: null,
+        jitterUntilMs: null,
+        msUntilJitterRetry: null,
+      },
     });
   }
 
@@ -64,6 +77,19 @@ export async function GET() {
       syncMode: "baseline" as const,
       fastIdleTicks: 0,
       fastIdleTicksRequired: 5,
+      courseConflict: {
+        active: false,
+        lastObservedCourseId: null,
+        jitterUntilMs: null,
+        msUntilJitterRetry: null,
+      },
+      accountQuiet: {
+        active: false,
+        reason: null,
+        lastObservedCourseId: null,
+        jitterUntilMs: null,
+        msUntilJitterRetry: null,
+      },
       nightlyHour: effectiveNightlyHour(),
     });
   }
@@ -102,6 +128,8 @@ export async function GET() {
     syncMode: timing.syncMode,
     fastIdleTicks: timing.fastIdleTicks,
     fastIdleTicksRequired: timing.fastIdleTicksRequired,
+    courseConflict: timing.courseConflict,
+    accountQuiet: timing.accountQuiet,
     nightlyHour: effectiveNightlyHour(),
   });
 }

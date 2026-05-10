@@ -34,7 +34,7 @@
 ### Dev/prod split + logging
 
 - Gate debug/diagnostic features on `NODE_ENV === 'development'` (Next.js sets this automatically)
-- Structured logger with `LOG_LEVEL` env var (default `"info"` in prod, `"debug"` in dev)
+- Lightweight console logger with `LOG_LEVEL` env var (default `"info"` in prod, `"debug"` in dev) — **[shipped]**
 - Consider `pino` (fast, structured JSON, Next.js-friendly) or a lightweight `console` wrapper with level filtering
 - Audit silent `catch {}` blocks in sync/polling — most errors are currently swallowed with no log output in production
 

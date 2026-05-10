@@ -18,6 +18,12 @@ import { clearCurrentSync, setCurrentSync } from "./sync-state";
 import { DuolingoUser, XpSummary } from "./types";
 import { formatLocalDate, getResolvedTimezone } from "./tz";
 import { tryAcquireAccountSyncGate } from "./sync-lock";
+import {
+  ACTIVE_COURSE_CONFLICT_ERROR,
+  ActiveCourseConflictError,
+  isActiveCourseConflictError,
+} from "./sync-conflict";
+import { logger } from "./logger";
 
 export interface SyncResult {
   type: "quick" | "full" | "skipped";
@@ -43,6 +49,7 @@ export async function fullSync(client: DuolingoClient, cycleAllCourses = false):
   let totalXp = 0;
 
   setCurrentSync(cycleAllCourses ? "cycle" : "single");
+  logger.info("sync start", { cycleAll: cycleAllCourses });
 
   try {
     const user = await client.getUser();
@@ -69,7 +76,8 @@ export async function fullSync(client: DuolingoClient, cycleAllCourses = false):
     if (cycleAllCourses) {
       warnings = await syncAllCourseDetails(client, user);
     } else {
-      await saveLanguageDetails(client, user.currentCourseId, user.learningLanguage);
+      const guard = createActiveCourseGuard(client, user.currentCourseId);
+      await saveLanguageDetails(client, user.currentCourseId, user.learningLanguage, guard);
     }
 
     logSync({
@@ -79,8 +87,31 @@ export async function fullSync(client: DuolingoClient, cycleAllCourses = false):
       durationMs: Date.now() - startedAtMs,
       cycleAll: cycleAllCourses,
     });
+    logger.info("sync complete", { cycleAll: cycleAllCourses, totalXp });
     return { type: "full", changed: true, totalXp, warnings: warnings.length ? warnings : undefined, timestamp: now };
   } catch (err) {
+    if (isActiveCourseConflictError(err)) {
+      logSync({
+        syncType: "full",
+        totalXp,
+        success: false,
+        errorMessage: ACTIVE_COURSE_CONFLICT_ERROR,
+        durationMs: Date.now() - startedAtMs,
+        cycleAll: cycleAllCourses,
+      });
+      logger.warn("sync aborted: active course conflict", {
+        cycleAll: cycleAllCourses,
+        details: err.details,
+      });
+      return {
+        type: "skipped",
+        changed: false,
+        totalXp,
+        error: ACTIVE_COURSE_CONFLICT_ERROR,
+        warnings: err.details,
+        timestamp: now,
+      };
+    }
     const msg = err instanceof Error ? err.message : String(err);
     logSync({
       syncType: "full",
@@ -90,6 +121,7 @@ export async function fullSync(client: DuolingoClient, cycleAllCourses = false):
       durationMs: Date.now() - startedAtMs,
       cycleAll: cycleAllCourses,
     });
+    logger.warn("sync failed", { cycleAll: cycleAllCourses, error: msg });
     return { type: "full", changed: false, totalXp, error: msg, timestamp: now };
   } finally {
     clearCurrentSync();
@@ -241,11 +273,11 @@ async function syncAllCourseDetails(client: DuolingoClient, user: DuolingoUser):
   const originalLearning = user.learningLanguage;
   const originalFrom = user.fromLanguage;
   const warnings: string[] = [];
-  let expectedActiveCourseId = originalCourseId;
+  const guard = createActiveCourseGuard(client, originalCourseId, warnings);
 
   // Sync the currently active course first (no switch needed)
-  await saveLanguageDetails(client, user.currentCourseId, user.learningLanguage);
-  await recordActiveCourseDrift(client, expectedActiveCourseId, warnings, "after syncing starting course");
+  await guard.check("before syncing starting course");
+  await saveLanguageDetails(client, user.currentCourseId, user.learningLanguage, guard);
 
   // Cycle through remaining courses in REVERSE of `user.courses` order.
   // The API-returned `user.courses` mirrors the Duolingo app's own
@@ -258,55 +290,77 @@ async function syncAllCourseDetails(client: DuolingoClient, user: DuolingoUser):
     const course = user.courses[i];
     if (course.id === originalCourseId) continue;
     try {
+      await guard.check(`before switching to ${course.id}`);
+      logger.debug("course switch start", { courseId: course.id });
       await client.switchCourse(course.id, course.learningLanguage, course.fromLanguage);
-      expectedActiveCourseId = course.id;
+      guard.expect(course.id);
+      await guard.check(`after switching to ${course.id}`);
       await new Promise((r) => setTimeout(r, 1000));
-      await saveLanguageDetails(client, course.id, course.learningLanguage);
-      await recordActiveCourseDrift(client, expectedActiveCourseId, warnings, `after syncing ${course.id}`);
-    } catch {
+      await saveLanguageDetails(client, course.id, course.learningLanguage, guard);
+    } catch (err) {
+      if (isActiveCourseConflictError(err)) throw err;
+      logger.warn("course sync skipped", {
+        courseId: course.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
       // skip this course if switch or fetch fails
     }
   }
 
-  const activeBeforeRestore = await readActiveCourseId(client);
-  if (activeBeforeRestore && activeBeforeRestore !== expectedActiveCourseId) {
-    warnings.push(
-      `Active course changed outside this cycle sync: expected ${expectedActiveCourseId}, saw ${activeBeforeRestore}`,
-    );
-  }
+  await guard.check("before restoring starting course");
 
   // Restore original course.
   if (user.courses.length > 1) {
     try {
+      logger.debug("course restore start", { courseId: originalCourseId });
       await client.switchCourse(originalCourseId, originalLearning, originalFrom);
-      expectedActiveCourseId = originalCourseId;
-    } catch {
-      // best effort restore
+      guard.expect(originalCourseId);
+      await guard.check("after restoring starting course");
+    } catch (err) {
+      if (isActiveCourseConflictError(err)) throw err;
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error("course restore failed", { courseId: originalCourseId, error: message });
+      throw new Error(`Failed to restore active course: ${message}`);
     }
   }
-  await recordActiveCourseDrift(client, expectedActiveCourseId, warnings, "after restoring starting course");
   return warnings;
 }
 
 async function readActiveCourseId(client: DuolingoClient): Promise<string | null> {
   try {
     return (await client.getUser()).currentCourseId;
-  } catch {
+  } catch (err) {
+    logger.debug("active course check failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return null;
   }
 }
 
-async function recordActiveCourseDrift(
+type ActiveCourseGuard = {
+  expect: (courseId: string) => void;
+  check: (context: string) => Promise<void>;
+};
+
+function createActiveCourseGuard(
   client: DuolingoClient,
   expectedCourseId: string,
-  warnings: string[],
-  context: string,
-): Promise<void> {
-  const activeCourseId = await readActiveCourseId(client);
-  if (!activeCourseId || activeCourseId === expectedCourseId) return;
-  warnings.push(
-    `Active course drift ${context}: expected ${expectedCourseId}, saw ${activeCourseId}`,
-  );
+  details: string[] = [],
+): ActiveCourseGuard {
+  let expected = expectedCourseId;
+  return {
+    expect(courseId: string) {
+      expected = courseId;
+    },
+    async check(context: string): Promise<void> {
+      const activeCourseId = await readActiveCourseId(client);
+      if (!activeCourseId || activeCourseId === expected) return;
+      const detail = `Active course changed outside this sync ${context}: expected ${expected}, saw ${activeCourseId}`;
+      details.push(detail);
+      logger.warn("active course drift", { context, expectedCourseId: expected, activeCourseId });
+      throw new ActiveCourseConflictError([...details]);
+    },
+  };
 }
 
 /**
@@ -356,13 +410,30 @@ function buildPathProgressMap(sections: PathSection[]): Map<string, number> {
   return result;
 }
 
-async function saveLanguageDetails(client: DuolingoClient, courseId: string, learningLanguage: string): Promise<void> {
+type VocabSnapshotRow = Parameters<typeof snapshotVocab>[1][number];
+type SkillSnapshotRow = Parameters<typeof snapshotSkills>[1][number];
+
+type CourseDetailDraft = {
+  vocab: VocabSnapshotRow[] | null;
+  skills: SkillSnapshotRow[] | null;
+  mistakeCount: number | null;
+};
+
+async function saveLanguageDetails(
+  client: DuolingoClient,
+  courseId: string,
+  learningLanguage: string,
+  guard?: ActiveCourseGuard,
+): Promise<void> {
+  const draft: CourseDetailDraft = { vocab: null, skills: null, mistakeCount: null };
+
   try {
-    const vocab = await client.getVocabulary();
-    if (vocab.vocab_overview) {
-      snapshotVocab(
-        courseId,
-        vocab.vocab_overview.map((w) => ({
+    try {
+      await guard?.check(`before ${courseId} vocabulary fetch`);
+      const vocab = await client.getVocabulary();
+      await guard?.check(`after ${courseId} vocabulary fetch`);
+      if (vocab.vocab_overview) {
+        draft.vocab = vocab.vocab_overview.map((w) => ({
           word: w.word_string,
           lexeme_id: w.lexeme_id,
           strength_bars: w.strength_bars,
@@ -370,24 +441,28 @@ async function saveLanguageDetails(client: DuolingoClient, courseId: string, lea
           pos: w.pos,
           gender: w.gender,
           last_practiced: w.last_practiced,
-        })),
-      );
-    }
-  } catch {
-    // vocabulary endpoint may be unavailable
-  }
-
-  try {
-    const [legacy, pathSections] = await Promise.all([
-      client.getLegacyUser(),
-      client.getPathSectioned().catch(() => []),
-    ]);
-    const pathProgress = buildPathProgressMap(pathSections);
-    const langData = resolveLegacyLanguageData(legacy, learningLanguage);
-    if (langData?.skills) {
-      snapshotSkills(
+        }));
+      }
+    } catch (err) {
+      if (isActiveCourseConflictError(err)) throw err;
+      logger.debug("vocabulary fetch failed", {
         courseId,
-        langData.skills.map((s) => ({
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // vocabulary endpoint may be unavailable
+    }
+
+    try {
+      await guard?.check(`before ${courseId} skill fetch`);
+      const [legacy, pathSections] = await Promise.all([
+        client.getLegacyUser(),
+        client.getPathSectioned().catch(() => []),
+      ]);
+      await guard?.check(`after ${courseId} skill fetch`);
+      const pathProgress = buildPathProgressMap(pathSections);
+      const langData = resolveLegacyLanguageData(legacy, learningLanguage);
+      if (langData?.skills) {
+        draft.skills = langData.skills.map((s) => ({
           skill_id: s.id,
           skill_name: s.name,
           learned: s.learned,
@@ -397,26 +472,66 @@ async function saveLanguageDetails(client: DuolingoClient, courseId: string, lea
           coords_x: s.coords_x ?? 0,
           coords_y: s.coords_y ?? 0,
           dependencies: s.dependencies ?? [],
-        })),
-      );
+        }));
+      }
+    } catch (err) {
+      if (isActiveCourseConflictError(err)) throw err;
+      logger.debug("skill fetch failed", {
+        courseId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // legacy endpoint may be unavailable
     }
-  } catch {
-    // legacy endpoint may be unavailable
-  }
 
-  try {
-    const mistakeCount = await client.getMistakeCount(courseId);
-    if (mistakeCount > 0) {
-      const db = getDb();
-      db.prepare(`
-        UPDATE course_snapshots SET mistake_count = ?
-        WHERE course_id = ? AND snapshot_time = (
-          SELECT MAX(snapshot_time) FROM course_snapshots WHERE course_id = ?
-        )
-      `).run(mistakeCount, courseId, courseId);
+    try {
+      await guard?.check(`before ${courseId} mistakes fetch`);
+      const mistakeCount = await client.getMistakeCount(courseId);
+      await guard?.check(`after ${courseId} mistakes fetch`);
+      if (mistakeCount > 0) {
+        draft.mistakeCount = mistakeCount;
+      }
+    } catch (err) {
+      if (isActiveCourseConflictError(err)) throw err;
+      logger.debug("mistake fetch failed", {
+        courseId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // mistakes endpoint may be unavailable
     }
-  } catch {
-    // mistakes endpoint may be unavailable
+
+    await guard?.check(`before saving ${courseId} details`);
+    saveCourseDetailDraft(courseId, draft);
+  } catch (err) {
+    if (isActiveCourseConflictError(err)) {
+      logger.warn("course detail writes skipped after active course drift", {
+        courseId,
+        details: err.details,
+      });
+      throw err;
+    }
+    logger.debug("course detail save failed", {
+      courseId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+}
+
+function saveCourseDetailDraft(courseId: string, draft: CourseDetailDraft): void {
+  if (draft.vocab) {
+    snapshotVocab(courseId, draft.vocab);
+  }
+  if (draft.skills) {
+    snapshotSkills(courseId, draft.skills);
+  }
+  if (draft.mistakeCount != null) {
+    const db = getDb();
+    db.prepare(`
+      UPDATE course_snapshots SET mistake_count = ?
+      WHERE course_id = ? AND snapshot_time = (
+        SELECT MAX(snapshot_time) FROM course_snapshots WHERE course_id = ?
+      )
+    `).run(draft.mistakeCount, courseId, courseId);
   }
 }
 
@@ -432,109 +547,79 @@ export async function syncCourseDetails(
   const originalLearning = user.learningLanguage;
   const originalFrom = user.fromLanguage;
   const needsSwitch = originalCourseId !== courseId;
+  const guard = createActiveCourseGuard(client, originalCourseId, details);
+  let switchedBack = !needsSwitch;
 
   try {
     if (needsSwitch) {
+      await guard.check(`before switching to ${courseId}`);
+      logger.debug("manual course switch start", { courseId });
       await client.switchCourse(courseId, learningLanguage, fromLanguage);
+      guard.expect(courseId);
       details.push(`Switched from ${originalCourseId} to ${courseId}`);
+      await guard.check(`after switching to ${courseId}`);
       await new Promise((r) => setTimeout(r, 2000));
     } else {
       details.push(`Already on ${courseId}, no switch needed`);
     }
 
-    try {
-      const vocab = await client.getVocabulary();
-      if (vocab.vocab_overview && vocab.vocab_overview.length > 0) {
-        snapshotVocab(
-          courseId,
-          vocab.vocab_overview.map((w) => ({
-            word: w.word_string,
-            lexeme_id: w.lexeme_id,
-            strength_bars: w.strength_bars,
-            skill: w.skill,
-            pos: w.pos,
-            gender: w.gender,
-            last_practiced: w.last_practiced,
-          })),
-        );
-        details.push(`Saved ${vocab.vocab_overview.length} vocab words`);
-      } else {
-        details.push(`Vocab endpoint returned empty (language: ${vocab.learning_language}, from: ${vocab.from_language})`);
-      }
-    } catch (err) {
-      details.push(`Vocab failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    await saveLanguageDetails(client, courseId, learningLanguage, guard);
+    details.push(`Saved course details for ${courseId}`);
 
-    try {
-      const legacy = await client.getLegacyUser();
-      if (legacy.language_data) {
-        const availableLanguages = Object.keys(legacy.language_data);
-        details.push(`Legacy API returned language_data keys: ${availableLanguages.join(", ")}`);
-        const langData = resolveLegacyLanguageData(legacy, learningLanguage);
-        if (langData?.skills && langData.skills.length > 0) {
-          snapshotSkills(
-            courseId,
-            langData.skills.map((s) => ({
-              skill_id: s.id,
-              skill_name: s.name,
-              learned: s.learned,
-              strength: s.strength ?? 0,
-              words: s.words ?? [],
-              levels_finished: s.levels_finished ?? s.finishedLevels ?? 0,
-              coords_x: s.coords_x ?? 0,
-              coords_y: s.coords_y ?? 0,
-              dependencies: s.dependencies ?? [],
-            })),
-          );
-          details.push(`Saved ${langData.skills.length} skills for ${learningLanguage}`);
-        } else {
-          details.push(
-            `No skills found for language "${learningLanguage}" (try keys: ${availableLanguages.join(", ")})`,
-          );
-        }
-      } else {
-        details.push("Legacy API returned no language_data");
-      }
-    } catch (err) {
-      details.push(`Legacy failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-
-    if (needsSwitch) {
-      const activeAfterFetch = await readActiveCourseId(client);
-      if (activeAfterFetch && activeAfterFetch !== courseId) {
-        details.push(`Warning: active course changed during sync; expected ${courseId}, saw ${activeAfterFetch}`);
-      }
-    }
-
-    let switchedBack = false;
     if (needsSwitch) {
       try {
+        await guard.check("before restoring starting course");
+        logger.debug("manual course restore start", { courseId: originalCourseId });
         await client.switchCourse(originalCourseId, originalLearning, originalFrom);
+        guard.expect(originalCourseId);
+        await guard.check("after restoring starting course");
         switchedBack = true;
         details.push(`Switched back to ${originalCourseId}`);
-        const activeAfterRestore = await readActiveCourseId(client);
-        if (activeAfterRestore && activeAfterRestore !== originalCourseId) {
-          details.push(
-            `Warning: active course restore did not stick; expected ${originalCourseId}, saw ${activeAfterRestore}`,
-          );
-        }
       } catch (err) {
+        if (isActiveCourseConflictError(err)) throw err;
+        switchedBack = false;
         details.push(`Failed to switch back: ${err instanceof Error ? err.message : String(err)}`);
+        return {
+          success: false,
+          switchedBack,
+          error: "Failed to restore active course",
+          details,
+        };
       }
     }
 
-    return { success: true, switchedBack: !needsSwitch || switchedBack, details };
+    return { success: true, switchedBack, details };
   } catch (err) {
+    if (isActiveCourseConflictError(err)) {
+      return {
+        success: false,
+        switchedBack: false,
+        error: ACTIVE_COURSE_CONFLICT_ERROR,
+        details: err.details,
+      };
+    }
     if (needsSwitch) {
       try {
+        await guard.check("before restoring starting course after error");
         await client.switchCourse(originalCourseId, originalLearning, originalFrom);
-      } catch {
-        // best effort
+        guard.expect(originalCourseId);
+        await guard.check("after restoring starting course after error");
+        switchedBack = true;
+      } catch (restoreErr) {
+        switchedBack = false;
+        if (isActiveCourseConflictError(restoreErr)) {
+          return {
+            success: false,
+            switchedBack: false,
+            error: ACTIVE_COURSE_CONFLICT_ERROR,
+            details: restoreErr.details,
+          };
+        }
       }
     }
     return {
       success: false,
-      switchedBack: true,
+      switchedBack,
       error: err instanceof Error ? err.message : String(err),
       details,
     };

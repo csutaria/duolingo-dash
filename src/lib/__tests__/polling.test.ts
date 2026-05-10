@@ -3,9 +3,13 @@ import {
   advanceSyncState,
   msUntilNextLocalTime,
   FAST_IDLE_TRIGGER_TICKS,
+  ACCOUNT_QUIET_JITTER_MIN_MS,
+  ACCOUNT_QUIET_JITTER_MAX_MS,
+  randomAccountQuietJitterMs,
   type SyncStateSnapshot,
 } from "../polling";
 import { __resetPollingStateForTests } from "../polling-state";
+import { ACTIVE_COURSE_CONFLICT_ERROR } from "../sync-conflict";
 
 describe("shouldKickoffPoll (regression guard for commit 84935f3)", () => {
   it("allows kickoff when nothing is running and no sync is in flight", () => {
@@ -55,6 +59,13 @@ describe("manual refresh cooldown", () => {
   });
 });
 
+describe("account-quiet jitter", () => {
+  it("uses a moderate bounded random delay", () => {
+    expect(randomAccountQuietJitterMs(() => 0)).toBe(ACCOUNT_QUIET_JITTER_MIN_MS);
+    expect(randomAccountQuietJitterMs(() => 1)).toBe(ACCOUNT_QUIET_JITTER_MAX_MS);
+  });
+});
+
 describe("advanceSyncState reducer", () => {
   const baseline: SyncStateSnapshot = { mode: "baseline", fastConsecutiveIdleTicks: 0 };
   const fastFresh: SyncStateSnapshot = { mode: "fast", fastConsecutiveIdleTicks: 0 };
@@ -79,7 +90,7 @@ describe("advanceSyncState reducer", () => {
       expect(r.fireFullSync).toBe(false);
     });
 
-    it("fires fullSync and reverts to baseline on 5th consecutive unchanged tick", () => {
+    it("signals automatic cycle readiness on 5th consecutive unchanged tick", () => {
       let state: SyncStateSnapshot = fastFresh;
       let fired = false;
       for (let i = 1; i <= FAST_IDLE_TRIGGER_TICKS; i++) {
@@ -92,15 +103,15 @@ describe("advanceSyncState reducer", () => {
         }
       }
       expect(fired).toBe(true);
-      expect(state).toEqual({ mode: "baseline", fastConsecutiveIdleTicks: 0 });
+      expect(state).toEqual({ mode: "fast", fastConsecutiveIdleTicks: FAST_IDLE_TRIGGER_TICKS });
     });
 
-    it("boots back to baseline immediately on any XP change (no extension, no continued fast-polling)", () => {
+    it("resets the quiet counter on any observed account change", () => {
       const r = advanceSyncState(
         { mode: "fast", fastConsecutiveIdleTicks: 3 },
         { type: "fast_tick", changed: true },
       );
-      expect(r.state).toEqual({ mode: "baseline", fastConsecutiveIdleTicks: 0 });
+      expect(r.state).toEqual({ mode: "fast", fastConsecutiveIdleTicks: 0 });
       expect(r.fireFullSync).toBe(false);
     });
 
@@ -130,28 +141,131 @@ describe("advanceSyncState reducer", () => {
   });
 });
 
-describe("fast-mode sync gate behavior", () => {
+describe("automatic account-quiet cycle behavior", () => {
   beforeEach(() => {
     jest.resetModules();
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
     __resetPollingStateForTests();
   });
 
   afterEach(() => {
+    const polling = require("../polling") as typeof import("../polling");
     const { clearCurrentSync } = require("../sync-state") as typeof import("../sync-state");
+    polling.stopPolling();
     clearCurrentSync();
+    jest.useRealTimers();
+    jest.restoreAllMocks();
     jest.resetModules();
     jest.dontMock("../sync");
     jest.dontMock("../external-sync-lock");
     __resetPollingStateForTests();
   });
 
-  it("keeps fast mode alive when the quiet-detector wants a full sync but the gate is busy", async () => {
+  function clientForAccountQuiet(totalXp = 100, courseId = "A") {
+    return {
+      getUser: jest.fn().mockResolvedValue({ totalXp, currentCourseId: courseId }),
+      getTotalXp: jest.fn().mockResolvedValue(totalXp),
+    } as unknown as Parameters<typeof import("../polling").startPolling>[0];
+  }
+
+  it("retries automatic cycle-all after quiet plus deterministic jitter", async () => {
+    jest.spyOn(Math, "random").mockReturnValue(0);
     const fullSync = jest.fn().mockResolvedValue({
       type: "full",
       changed: true,
       totalXp: 100,
       timestamp: new Date().toISOString(),
     });
+    jest.doMock("../sync", () => ({
+      quickCheck: jest.fn().mockResolvedValue({ changed: false, currentXp: 100 }),
+      fullSync,
+    }));
+
+    const polling = require("../polling") as typeof import("../polling");
+    const { getPollingState } = require("../polling-state") as typeof import("../polling-state");
+    const state = getPollingState();
+    const client = clientForAccountQuiet();
+    state.mode = "fast";
+    state.automaticCycleReason = "xp_changed";
+
+    for (let i = 0; i < polling.FAST_IDLE_TRIGGER_TICKS; i++) {
+      await polling.__runFastTickForTests(client);
+    }
+
+    expect(state.accountQuietJitterUntilMs).toBe(Date.now() + ACCOUNT_QUIET_JITTER_MIN_MS);
+    expect(fullSync).not.toHaveBeenCalled();
+
+    await jest.advanceTimersByTimeAsync(ACCOUNT_QUIET_JITTER_MIN_MS);
+
+    expect(fullSync).toHaveBeenCalledWith(client, true);
+    expect(state.mode).toBe("baseline");
+    expect(state.accountQuietJitterTimer).toBeNull();
+  });
+
+  it("nightly enters the same account-quiet gate instead of syncing immediately", async () => {
+    const fullSync = jest.fn();
+    jest.doMock("../sync", () => ({
+      quickCheck: jest.fn().mockResolvedValue({ changed: false, currentXp: 100 }),
+      fullSync,
+    }));
+
+    const polling = require("../polling") as typeof import("../polling");
+    const { getPollingState } = require("../polling-state") as typeof import("../polling-state");
+    const state = getPollingState();
+    const client = clientForAccountQuiet();
+
+    await polling.__runNightlyTickForTests(client);
+
+    expect(fullSync).not.toHaveBeenCalled();
+    expect(state.mode).toBe("fast");
+    expect(state.automaticCycleReason).toBe("nightly");
+    expect(state.fastLastObservedXp).toBe(100);
+    expect(state.fastTimer).not.toBeNull();
+  });
+
+  it("resets account quiet when XP changes during the jitter delay", async () => {
+    jest.spyOn(Math, "random").mockReturnValue(0);
+    const fullSync = jest.fn();
+    jest.doMock("../sync", () => ({
+      quickCheck: jest.fn().mockResolvedValue({ changed: false, currentXp: 100 }),
+      fullSync,
+    }));
+
+    const polling = require("../polling") as typeof import("../polling");
+    const { getPollingState } = require("../polling-state") as typeof import("../polling-state");
+    const state = getPollingState();
+    const client = {
+      getUser: jest
+        .fn()
+        .mockResolvedValueOnce({ totalXp: 100, currentCourseId: "A" })
+        .mockResolvedValueOnce({ totalXp: 100, currentCourseId: "A" })
+        .mockResolvedValueOnce({ totalXp: 100, currentCourseId: "A" })
+        .mockResolvedValueOnce({ totalXp: 100, currentCourseId: "A" })
+        .mockResolvedValueOnce({ totalXp: 100, currentCourseId: "A" })
+        .mockResolvedValueOnce({ totalXp: 101, currentCourseId: "A" }),
+      getTotalXp: jest.fn().mockResolvedValue(100),
+    } as unknown as Parameters<typeof polling.startPolling>[0];
+    state.mode = "fast";
+    state.automaticCycleReason = "xp_changed";
+
+    for (let i = 0; i < polling.FAST_IDLE_TRIGGER_TICKS; i++) {
+      await polling.__runFastTickForTests(client);
+    }
+
+    await jest.advanceTimersByTimeAsync(ACCOUNT_QUIET_JITTER_MIN_MS);
+
+    expect(fullSync).not.toHaveBeenCalled();
+    expect(state.mode).toBe("fast");
+    expect(state.fastConsecutiveIdleTicks).toBe(0);
+    expect(state.fastLastObservedXp).toBe(101);
+    expect(state.accountQuietJitterTimer).toBeNull();
+    expect(state.fastTimer).not.toBeNull();
+  });
+
+  it("returns to account-quiet monitoring when the gate is busy during jitter retry", async () => {
+    jest.spyOn(Math, "random").mockReturnValue(0);
+    const fullSync = jest.fn();
     jest.doMock("../sync", () => ({
       quickCheck: jest.fn().mockResolvedValue({ changed: false, currentXp: 100 }),
       fullSync,
@@ -161,55 +275,55 @@ describe("fast-mode sync gate behavior", () => {
     const { getPollingState } = require("../polling-state") as typeof import("../polling-state");
     const { setCurrentSync } = require("../sync-state") as typeof import("../sync-state");
     const state = getPollingState();
+    const client = clientForAccountQuiet();
     state.mode = "fast";
-    state.fastLastObservedXp = 100;
-    state.fastConsecutiveIdleTicks = polling.FAST_IDLE_TRIGGER_TICKS - 1;
-    setCurrentSync("single");
+    state.automaticCycleReason = "xp_changed";
 
-    const client = { getTotalXp: jest.fn().mockResolvedValue(100) } as unknown as Parameters<
-      typeof polling.startPolling
-    >[0];
-    await polling.__runFastTickForTests(client);
+    for (let i = 0; i < polling.FAST_IDLE_TRIGGER_TICKS; i++) {
+      await polling.__runFastTickForTests(client);
+    }
+    setCurrentSync("cycle");
+
+    await jest.advanceTimersByTimeAsync(ACCOUNT_QUIET_JITTER_MIN_MS);
 
     expect(fullSync).not.toHaveBeenCalled();
     expect(state.mode).toBe("fast");
-    expect(state.fastConsecutiveIdleTicks).toBe(polling.FAST_IDLE_TRIGGER_TICKS - 1);
+    expect(state.accountQuietJitterTimer).toBeNull();
+    expect(state.fastTimer).not.toBeNull();
+    expect(state.isRunning).toBe(false);
   });
 
-  it("keeps fast mode alive when the external account lock is busy", async () => {
+  it("enters course-conflict quiet mode when an automatic cycle detects active-course drift", async () => {
+    jest.spyOn(Math, "random").mockReturnValue(0);
     const fullSync = jest.fn().mockResolvedValue({
-      type: "full",
-      changed: true,
+      type: "skipped",
+      changed: false,
       totalXp: 100,
+      error: ACTIVE_COURSE_CONFLICT_ERROR,
       timestamp: new Date().toISOString(),
     });
     jest.doMock("../sync", () => ({
       quickCheck: jest.fn().mockResolvedValue({ changed: false, currentXp: 100 }),
       fullSync,
     }));
-    jest.doMock("../external-sync-lock", () => ({
-      tryAcquireExternalSyncLock: jest.fn(async () => ({
-        acquired: false,
-        reason: "Sync already running",
-      })),
-    }));
 
     const polling = require("../polling") as typeof import("../polling");
     const { getPollingState } = require("../polling-state") as typeof import("../polling-state");
     const state = getPollingState();
+    const client = clientForAccountQuiet();
     state.mode = "fast";
-    state.fastLastObservedXp = 100;
-    state.fastConsecutiveIdleTicks = polling.FAST_IDLE_TRIGGER_TICKS - 1;
+    state.automaticCycleReason = "xp_changed";
 
-    const client = {
-      getTotalXp: jest.fn().mockResolvedValue(100),
-      getUserId: jest.fn(() => 123),
-    } as unknown as Parameters<typeof polling.startPolling>[0];
-    await polling.__runFastTickForTests(client);
+    for (let i = 0; i < polling.FAST_IDLE_TRIGGER_TICKS; i++) {
+      await polling.__runFastTickForTests(client);
+    }
+    await jest.advanceTimersByTimeAsync(ACCOUNT_QUIET_JITTER_MIN_MS);
 
-    expect(fullSync).not.toHaveBeenCalled();
-    expect(state.mode).toBe("fast");
-    expect(state.isRunning).toBe(false);
+    expect(fullSync).toHaveBeenCalledWith(client, true);
+    expect(state.mode).toBe("course_conflict");
+    expect(state.automaticCycleReason).toBe("active_course_conflict");
+    expect(state.fastConsecutiveIdleTicks).toBe(0);
+    expect(state.accountQuietJitterTimer).toBeNull();
   });
 });
 
@@ -247,6 +361,36 @@ describe("manualRefresh sync gate behavior", () => {
     });
     expect(getPollingState().isRunning).toBe(false);
     expect(getPollingState().lastManualRefreshAtMs).toBe(0);
+  });
+
+  it("returns active-course conflicts immediately without scheduling retry", async () => {
+    const fullSync = jest.fn().mockResolvedValue({
+      type: "skipped",
+      changed: false,
+      totalXp: 100,
+      error: ACTIVE_COURSE_CONFLICT_ERROR,
+      timestamp: new Date().toISOString(),
+    });
+    jest.doMock("../sync", () => ({
+      quickCheck: jest.fn().mockResolvedValue({ changed: false, currentXp: 100 }),
+      fullSync,
+    }));
+    const polling = require("../polling") as typeof import("../polling");
+    const { getPollingState } = require("../polling-state") as typeof import("../polling-state");
+    const state = getPollingState();
+    const client = { getUserId: jest.fn(() => 123) } as unknown as Parameters<
+      typeof polling.manualRefresh
+    >[0];
+
+    const result = await polling.manualRefresh(client);
+
+    expect(result).toMatchObject({
+      type: "skipped",
+      changed: false,
+      error: ACTIVE_COURSE_CONFLICT_ERROR,
+    });
+    expect(state.mode).toBe("baseline");
+    expect(state.accountQuietJitterTimer).toBeNull();
   });
 });
 
