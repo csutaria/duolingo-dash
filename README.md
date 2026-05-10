@@ -1,6 +1,10 @@
 # Duolingo Dash
 
-Personal Duolingo learning dashboard. All data stays local — API calls go directly to duolingo.com, no third-party services.
+Personal Duolingo learning dashboard. *Fully vibe-coded*
+
+Track your profile XP, daily streak, and per-course XP (from after you've started syncing course progress). Then go to the course and vocabulary pages for skill and vocabulary insights.
+
+API queries are sent to Duolingo APIs, no third-party services. All data stays local.
 
 ![Overview](docs/screenshots/overview.png)
 
@@ -35,6 +39,7 @@ npm run screenshots
 2. Open Developer Tools (F12)
 3. Go to **Application > Cookies > duolingo.com**
 4. Copy the value of `jwt_token`
+5. Pass this to the application through the DUOLINGO_JWT environment variable.
 
 Alternatively, in the **Network** tab, find any request to duolingo.com and copy the `Authorization` header value after `Bearer`.
 
