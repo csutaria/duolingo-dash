@@ -42,7 +42,7 @@ function setupMocks() {
     effectiveNightlyHour: jest.fn(),
     rescheduleNightly: jest.fn(),
   };
-  polling.effectiveNightlyHour.mockImplementation(() => settings.stored.nightly_hour ?? 2);
+  polling.effectiveNightlyHour.mockImplementation(() => settings.stored.nightly_hour ?? 23);
 
   const tz: TzMock = {
     invalidateResolvedTimezone: jest.fn(),
@@ -110,13 +110,13 @@ describe("GET /api/settings", () => {
     });
   });
 
-  it("returns the default nightlyHour (2) when nothing is stored", async () => {
+  it("returns the default nightlyHour (23) when nothing is stored", async () => {
     setupMocks();
     const { GET } = loadRoute();
 
     const body = await GET().json();
 
-    expect(body).toEqual({ nightlyHour: 2, timezoneOverride: null });
+    expect(body).toEqual({ nightlyHour: 23, timezoneOverride: null });
   });
 });
 
@@ -158,7 +158,7 @@ describe("POST /api/settings", () => {
       expect(res.status).toBe(200);
       expect(settings.updateAppSettings).toHaveBeenCalledWith({ nightly_hour: null });
       expect(polling.rescheduleNightly).toHaveBeenCalledTimes(1);
-      expect(body.nightlyHour).toBe(2);
+      expect(body.nightlyHour).toBe(23);
     });
 
     it("rejects non-integer numbers (400, no update, no reschedule)", async () => {

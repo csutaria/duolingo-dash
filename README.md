@@ -65,14 +65,14 @@ The dashboard's goal is simple: stay current without interrupting you while you 
 **Background sync, at a glance:**
 
 - **Every 30 min** — cheap XP check only, no course switching.
-- **If your XP changed** — switches to a 2-min watch. Any new XP in that window drops back to the 30-min baseline (you're still practicing; try again later). 10 minutes of quiet → one full all-course sync.
-- **Every night at a configurable hour (default 02:00, in your resolved timezone)** — one full all-course sync to catch idle-day changes. The hour is selectable from the polling-status panel. The timezone follows the resolver chain: SyncBar **Override** input (in the same panel) → `DUOLINGO_TZ` env → Duolingo profile → host. If you happen to be earning XP around that hour, the nightly skips its own sync and lets the quiet-watcher run one once you stop.
+- **If your XP changed** — switches to a 2-min account watch. Any XP or active-course change in that window resets the quiet counter (you're still practicing, or something else is using the account). 10 minutes of quiet plus a short random backoff → one full all-course sync.
+- **Every night at a configurable hour (default 23:00, in your resolved timezone)** — one full all-course sync to catch idle-day changes. The hour is selectable from the polling-status panel and remembered across restarts. The timezone follows the resolver chain: SyncBar **Override** input (in the same panel) → `DUOLINGO_TZ` env → Duolingo profile → host. Nightly uses the same quiet watcher, so if you happen to be earning XP or switching courses around that hour, it waits until the account is quiet.
 - **Manual Refresh** — resyncs the active course only.
 - **Manual Sync All Languages** — resyncs every course immediately (same disruption caveat below).
 
 ### Heads-up: all-course syncs switch your active Duolingo language
 
-Reading skill and vocab data requires Duolingo's API to have that course active on your account. During a full all-course sync, Dash temporarily switches your active course one-at-a-time and switches back when done. This is visible in the real Duolingo app — if you start a lesson mid-sync you might land in the wrong language. The 10-min quiet window before Dash fires one is specifically designed to avoid this.
+Reading skill and vocab data requires Duolingo's API to have that course active on your account. During a full all-course sync, Dash temporarily switches your active course one-at-a-time and switches back when done. This is visible in the real Duolingo app — if you start a lesson mid-sync you might land in the wrong language. The quiet window before Dash fires one is specifically designed to avoid this. If the active course changes unexpectedly during an automatic all-course sync, Dash aborts the cycle, skips drift-tainted course-detail writes, and waits for a quiet window before retrying.
 
 ### Pause + progress bar
 

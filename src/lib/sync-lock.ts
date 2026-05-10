@@ -2,6 +2,7 @@ import { getPollingState } from "./polling-state";
 import { getCurrentSync } from "./sync-state";
 import type { DuolingoClient } from "./duolingo";
 import { SYNC_LOCK_UNAVAILABLE, tryAcquireExternalSyncLock } from "./external-sync-lock";
+import { logger } from "./logger";
 
 export const SYNC_ALREADY_RUNNING = "Sync already running";
 
@@ -28,14 +29,17 @@ export type SyncGate = SyncGateBusy | SyncGateAcquired;
 export function tryAcquireSyncGate(): SyncGate {
   const state = getPollingState();
   if (state.isRunning || getCurrentSync() != null) {
+    logger.debug("sync gate busy");
     return { acquired: false, reason: SYNC_ALREADY_RUNNING };
   }
 
   state.isRunning = true;
+  logger.debug("sync gate acquired");
   return {
     acquired: true,
     release: () => {
       state.isRunning = false;
+      logger.debug("sync gate released");
     },
   };
 }
@@ -67,10 +71,12 @@ export async function tryAcquireAccountSyncGate(client: DuolingoClient): Promise
     externalGate = await tryAcquireExternalSyncLock(client);
   } catch {
     localGate.release();
+    logger.warn("external sync lock unavailable");
     return { acquired: false, reason: SYNC_LOCK_UNAVAILABLE };
   }
   if (!externalGate.acquired) {
     localGate.release();
+    logger.debug("external sync lock busy", { reason: externalGate.reason });
     return externalGate;
   }
 

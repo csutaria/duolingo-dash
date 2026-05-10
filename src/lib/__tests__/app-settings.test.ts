@@ -120,9 +120,9 @@ describe("effectiveNightlyHour", () => {
     jest.dontMock("../db");
   });
 
-  it("returns the documented default (2) when the row has NULL nightly_hour", () => {
+  it("returns the documented default (23) when the row has NULL nightly_hour", () => {
     expect(polling.effectiveNightlyHour()).toBe(polling.NIGHTLY_HOUR_DEFAULT);
-    expect(polling.NIGHTLY_HOUR_DEFAULT).toBe(2);
+    expect(polling.NIGHTLY_HOUR_DEFAULT).toBe(23);
   });
 
   it("returns the stored value when it's a valid 0..23 integer", () => {

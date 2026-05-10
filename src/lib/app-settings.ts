@@ -5,8 +5,8 @@ import { getDb } from "./db";
  * `app_settings` table (`id = 1`, seeded by `initSchema`). NULL columns
  * mean "fall through to the built-in default":
  *
- *  - `nightly_hour` NULL → `effectiveNightlyHour()` returns 2 (legacy
- *    default in R).
+ *  - `nightly_hour` NULL → `effectiveNightlyHour()` returns the built-in
+ *    nightly default in R.
  *  - `timezone_override` NULL → resolver chain skips the UI override
  *    and falls through to `DUOLINGO_TZ` → Duolingo profile → host.
  *

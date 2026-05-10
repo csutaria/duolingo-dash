@@ -1,6 +1,13 @@
 import type { DuolingoClient } from "./duolingo";
 import type { SyncResult } from "./sync";
 
+export type AutomaticCycleReason =
+  | "xp_changed"
+  | "nightly"
+  | "active_course_conflict"
+  | "gate_busy"
+  | "retry_error";
+
 /**
  * All mutable polling/server-state lives here, behind a single `globalThis`
  * bucket. In Next.js dev, HMR re-executes modules — without this bucket,
@@ -17,13 +24,17 @@ export type PollingState = {
 
   baselineTimer: ReturnType<typeof setInterval> | null;
   fastTimer: ReturnType<typeof setInterval> | null;
+  accountQuietJitterTimer: ReturnType<typeof setTimeout> | null;
   nightlyTimer: ReturnType<typeof setTimeout> | null;
 
   isRunning: boolean;
 
-  mode: "baseline" | "fast";
+  mode: "baseline" | "fast" | "course_conflict";
   fastLastObservedXp: number | null;
   fastConsecutiveIdleTicks: number;
+  accountQuietLastObservedCourseId: string | null;
+  accountQuietJitterUntilMs: number | null;
+  automaticCycleReason: AutomaticCycleReason | null;
 
   lastBaselineTickAtMs: number | null;
   lastNightlyAtMs: number | null;
@@ -37,11 +48,15 @@ function initialState(): PollingState {
     userPaused: false,
     baselineTimer: null,
     fastTimer: null,
+    accountQuietJitterTimer: null,
     nightlyTimer: null,
     isRunning: false,
     mode: "baseline",
     fastLastObservedXp: null,
     fastConsecutiveIdleTicks: 0,
+    accountQuietLastObservedCourseId: null,
+    accountQuietJitterUntilMs: null,
+    automaticCycleReason: null,
     lastBaselineTickAtMs: null,
     lastNightlyAtMs: null,
     lastManualRefreshAtMs: 0,

@@ -2,6 +2,7 @@ import net from "node:net";
 import tls from "node:tls";
 import { randomUUID } from "node:crypto";
 import type { DuolingoClient } from "./duolingo";
+import { logger } from "./logger";
 
 export const SYNC_LOCK_UNAVAILABLE = "Sync lock unavailable";
 
@@ -56,6 +57,7 @@ export function isExternalSyncLockConfigured(): boolean {
 export async function tryAcquireExternalSyncLock(client: DuolingoClient): Promise<ExternalSyncLock> {
   const redisUrl = getRedisUrl();
   if (!redisUrl) {
+    logger.debug("external sync lock disabled");
     return { acquired: true, release: async () => {} };
   }
 
@@ -68,12 +70,15 @@ export async function tryAcquireExternalSyncLock(client: DuolingoClient): Promis
   try {
     acquired = await redis.setNxPx(key, token, ttlMs);
   } catch {
+    logger.warn("external sync lock acquire failed");
     return { acquired: false, reason: SYNC_LOCK_UNAVAILABLE };
   }
 
   if (!acquired) {
+    logger.debug("external sync lock busy", { key });
     return { acquired: false, reason: "Sync already running" };
   }
+  logger.debug("external sync lock acquired", { key, ttlMs });
 
   const heartbeatMs = Math.max(1000, Math.floor(ttlMs / 3));
   const heartbeat = setInterval(() => {
@@ -90,6 +95,7 @@ export async function tryAcquireExternalSyncLock(client: DuolingoClient): Promis
       clearInterval(heartbeat);
       try {
         await redis.release(key, token);
+        logger.debug("external sync lock released", { key });
       } catch {
         // Do not mask the sync result because cleanup lost the Redis connection.
       }

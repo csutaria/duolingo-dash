@@ -1,10 +1,12 @@
 import { DuolingoClient } from "./duolingo";
 import { quickCheck, fullSync, SyncResult } from "./sync";
 import { getCurrentSync, CurrentSync } from "./sync-state";
-import { getPollingState } from "./polling-state";
+import { getPollingState, type AutomaticCycleReason } from "./polling-state";
 import { epochMsForLocalTime, getLocalParts } from "./tz";
 import { getAppSettings } from "./app-settings";
 import { SYNC_ALREADY_RUNNING, tryAcquireAccountSyncGate } from "./sync-lock";
+import { isActiveCourseConflictResult } from "./sync-conflict";
+import { logger } from "./logger";
 
 /**
  * @internal exported for tests
@@ -36,15 +38,17 @@ function skippedBecauseSyncRunning(totalXp = 0, reason = SYNC_ALREADY_RUNNING): 
 // Baseline: poll totalXp every 30 minutes. If it has changed since the last
 // successful full sync, enter fast mode.
 export const BASELINE_POLL_MS = 30 * 60 * 1000;
-// Fast mode: poll totalXp every 2 minutes. Any observed change boots back to
-// baseline; 5 consecutive unchanged ticks (10 minutes of quiet) fire a full
-// cycle sync.
+// Account-quiet mode: poll account state every 2 minutes. Any observed XP or
+// active-course change resets the quiet counter; 5 consecutive unchanged ticks
+// (10 minutes of quiet) schedule an automatic cycle sync after jitter.
 export const FAST_POLL_MS = 2 * 60 * 1000;
 export const FAST_IDLE_TRIGGER_TICKS = 5;
-// Nightly: single sync at 02:00 in resolved zone (R) by default.
+export const ACCOUNT_QUIET_JITTER_MIN_MS = 30 * 1000;
+export const ACCOUNT_QUIET_JITTER_MAX_MS = 120 * 1000;
+// Nightly: single sync at 23:00 in resolved zone (R) by default.
 // `effectiveNightlyHour()` reads `app_settings.nightly_hour` at scheduling
 // time so a UI change re-arms the next setTimeout without a process restart.
-export const NIGHTLY_HOUR_DEFAULT = 2;
+export const NIGHTLY_HOUR_DEFAULT = 23;
 /** @deprecated kept as the documented default; runtime should call `effectiveNightlyHour()`. */
 export const NIGHTLY_HOUR_LOCAL = NIGHTLY_HOUR_DEFAULT;
 
@@ -78,20 +82,22 @@ const MIN_MANUAL_REFRESH_MS = 30 * 1000;
  * Events:
  *  - `baseline_tick { changed }`: a 30-min baseline poll finished.
  *    `changed` = (currentXp !== lastSyncedXp).
- *  - `fast_tick { changed }`: a 2-min fast poll finished.
- *    `changed` = (currentXp !== lastObservedXp from previous fast tick).
+ *  - `fast_tick { changed }`: a 2-min account-quiet poll finished.
+ *    `changed` = account XP or active course differed from the previous
+ *    observation.
  *  - `external_fullsync_done`: any `fullSync` triggered by a path other than
  *    the fast-poll idle trigger (nightly, manual, etc.) completed.
  *
  * Rules:
  *  - baseline + change → fast (idle counter = 0).
  *  - baseline + no-change → baseline (no-op).
- *  - fast + change → baseline (no extension; next baseline tick re-detects).
+ *  - fast + change → fast (idle counter = 0).
  *  - fast + no-change → fast (idle counter += 1); at 5, signal fullSync and
- *    return to baseline.
+ *    signal automatic cycle readiness.
  *  - external full-sync completed at any time → baseline.
  */
 export type SyncMode = "baseline" | "fast";
+export type RuntimeSyncMode = SyncMode | "course_conflict";
 export type SyncStateSnapshot = {
   mode: SyncMode;
   fastConsecutiveIdleTicks: number;
@@ -128,11 +134,11 @@ export function advanceSyncState(
     return { state, fireFullSync: false };
   }
   if (event.changed) {
-    return { state: { mode: "baseline", fastConsecutiveIdleTicks: 0 }, fireFullSync: false };
+    return { state: { mode: "fast", fastConsecutiveIdleTicks: 0 }, fireFullSync: false };
   }
   const nextTicks = state.fastConsecutiveIdleTicks + 1;
   if (nextTicks >= FAST_IDLE_TRIGGER_TICKS) {
-    return { state: { mode: "baseline", fastConsecutiveIdleTicks: 0 }, fireFullSync: true };
+    return { state: { mode: "fast", fastConsecutiveIdleTicks: nextTicks }, fireFullSync: true };
   }
   return {
     state: { mode: "fast", fastConsecutiveIdleTicks: nextTicks },
@@ -170,11 +176,29 @@ export function msUntilNextLocalTime(hour: number, now: number = Date.now()): nu
 
 // ─── Timer mechanics ──────────────────────────────────────────────────────
 
-function enterFastMode(seedXp: number): void {
+type AccountObservation = {
+  totalXp: number;
+  currentCourseId: string;
+};
+
+function enterAccountQuietMode(
+  client: DuolingoClient,
+  reason: AutomaticCycleReason,
+  seed?: Partial<AccountObservation>,
+): void {
   const state = getPollingState();
-  state.mode = "fast";
-  state.fastLastObservedXp = seedXp;
+  state.client = client;
+  state.mode = reason === "active_course_conflict" ? "course_conflict" : "fast";
+  state.fastLastObservedXp = seed?.totalXp ?? null;
   state.fastConsecutiveIdleTicks = 0;
+  state.accountQuietLastObservedCourseId = seed?.currentCourseId ?? null;
+  state.automaticCycleReason = reason;
+  clearAccountQuietJitter();
+  logger.debug("account quiet detector entered", {
+    reason,
+    seedXp: seed?.totalXp ?? null,
+    seedCourseId: seed?.currentCourseId ?? null,
+  });
   if (state.fastTimer) return;
   state.fastTimer = setInterval(() => {
     if (state.client) void fastTick(state.client);
@@ -186,24 +210,46 @@ function exitFastMode(): void {
   state.mode = "baseline";
   state.fastLastObservedXp = null;
   state.fastConsecutiveIdleTicks = 0;
+  state.accountQuietLastObservedCourseId = null;
+  state.automaticCycleReason = null;
+  clearAccountQuietJitter();
   if (state.fastTimer) {
     clearInterval(state.fastTimer);
     state.fastTimer = null;
   }
 }
 
+function clearAccountQuietJitter(): void {
+  const state = getPollingState();
+  if (state.accountQuietJitterTimer) {
+    clearTimeout(state.accountQuietJitterTimer);
+    state.accountQuietJitterTimer = null;
+  }
+  state.accountQuietJitterUntilMs = null;
+}
+
+export function randomAccountQuietJitterMs(random: () => number = Math.random): number {
+  const span = ACCOUNT_QUIET_JITTER_MAX_MS - ACCOUNT_QUIET_JITTER_MIN_MS;
+  return Math.min(
+    ACCOUNT_QUIET_JITTER_MAX_MS,
+    ACCOUNT_QUIET_JITTER_MIN_MS + Math.floor(random() * (span + 1)),
+  );
+}
+
 async function baselineTick(client: DuolingoClient): Promise<void> {
   const state = getPollingState();
+  if (state.mode !== "baseline") return;
   if (state.isRunning) return;
   state.lastBaselineTickAtMs = Date.now();
+  logger.debug("baseline tick");
   try {
     const { changed, currentXp } = await quickCheck(client);
     const transition = advanceSyncState(
       { mode: state.mode, fastConsecutiveIdleTicks: state.fastConsecutiveIdleTicks },
       { type: "baseline_tick", changed },
     );
-    if (transition.state.mode === "fast" && state.mode !== "fast") {
-      enterFastMode(currentXp);
+    if (transition.state.mode === "fast") {
+      enterAccountQuietMode(client, "xp_changed", { totalXp: currentXp });
     }
   } catch {
     // quickCheck failures are intentionally swallowed — they're cheap and
@@ -213,53 +259,149 @@ async function baselineTick(client: DuolingoClient): Promise<void> {
 
 async function fastTick(client: DuolingoClient): Promise<void> {
   const state = getPollingState();
-  if (state.mode !== "fast") {
-    // Defensive: timer should have been cleared. Clear it now and bail.
-    if (state.fastTimer) {
-      clearInterval(state.fastTimer);
-      state.fastTimer = null;
-    }
+  if (state.mode === "fast" || state.mode === "course_conflict") {
+    await accountQuietTick(client);
     return;
   }
-  if (state.isRunning) return;
+  // Defensive: timer should have been cleared. Clear it now and bail.
+  if (state.fastTimer) {
+    clearInterval(state.fastTimer);
+    state.fastTimer = null;
+  }
+}
 
-  let currentXp: number;
-  try {
-    currentXp = await client.getTotalXp();
-  } catch {
+async function accountQuietTick(client: DuolingoClient): Promise<void> {
+  const state = getPollingState();
+  if (
+    (state.mode !== "fast" && state.mode !== "course_conflict")
+    || state.isRunning
+    || state.accountQuietJitterTimer
+  ) return;
+  logger.debug("account quiet tick", {
+    reason: state.automaticCycleReason,
+    idleTicks: state.fastConsecutiveIdleTicks,
+    lastCourseId: state.accountQuietLastObservedCourseId,
+  });
+
+  const observation = await readAccountObservation(client);
+  if (!observation) {
     return;
   }
 
-  const changed = state.fastLastObservedXp !== null && currentXp !== state.fastLastObservedXp;
-  state.fastLastObservedXp = currentXp;
+  const changed = accountObservationChanged(state, observation);
+
+  state.fastLastObservedXp = observation.totalXp;
+  state.accountQuietLastObservedCourseId = observation.currentCourseId;
+
+  if (changed) {
+    state.fastConsecutiveIdleTicks = 0;
+    logger.debug("account quiet reset", {
+      reason: state.automaticCycleReason,
+      currentXp: observation.totalXp,
+      currentCourseId: observation.currentCourseId,
+    });
+    return;
+  }
 
   const transition = advanceSyncState(
     { mode: "fast", fastConsecutiveIdleTicks: state.fastConsecutiveIdleTicks },
-    { type: "fast_tick", changed },
+    { type: "fast_tick", changed: false },
   );
-
-  if (transition.fireFullSync) {
-    const gate = await tryAcquireAccountSyncGate(client);
-    // Stay in fast mode when another mutation owns the gate. The next fast
-    // tick will retry instead of silently dropping the automatic cycle sync.
-    if (!gate.acquired) return;
-    exitFastMode();
-    try {
-      state.lastSyncResult = await fullSync(client, true);
-    } catch {
-      // logged inside fullSync
-    } finally {
-      await gate.release();
-    }
-    return;
-  }
-
-  if (transition.state.mode === "baseline") {
-    exitFastMode();
-    return;
-  }
-
   state.fastConsecutiveIdleTicks = transition.state.fastConsecutiveIdleTicks;
+  if (transition.fireFullSync) {
+    scheduleAccountQuietJitter(client);
+  }
+}
+
+function scheduleAccountQuietJitter(client: DuolingoClient): void {
+  const state = getPollingState();
+  if (state.accountQuietJitterTimer) return;
+  const delay = randomAccountQuietJitterMs();
+  state.accountQuietJitterUntilMs = Date.now() + delay;
+  logger.info("account quiet jitter scheduled", {
+    reason: state.automaticCycleReason,
+    delayMs: delay,
+  });
+  if (state.fastTimer) {
+    clearInterval(state.fastTimer);
+    state.fastTimer = null;
+  }
+  state.accountQuietJitterTimer = setTimeout(() => {
+    state.accountQuietJitterTimer = null;
+    state.accountQuietJitterUntilMs = null;
+    void retryAutomaticCycle(client);
+  }, delay);
+}
+
+async function retryAutomaticCycle(client: DuolingoClient): Promise<void> {
+  const state = getPollingState();
+  if (state.mode !== "fast" && state.mode !== "course_conflict") return;
+  logger.info("account quiet jitter retry", { reason: state.automaticCycleReason });
+
+  const observation = await readAccountObservation(client);
+  if (!observation) {
+    enterAccountQuietMode(client, state.automaticCycleReason ?? "retry_error");
+    return;
+  }
+  if (accountObservationChanged(state, observation)) {
+    logger.debug("account quiet retry precheck reset", {
+      reason: state.automaticCycleReason,
+      currentXp: observation.totalXp,
+      currentCourseId: observation.currentCourseId,
+    });
+    enterAccountQuietMode(client, state.automaticCycleReason ?? "retry_error", observation);
+    return;
+  }
+  state.fastLastObservedXp = observation.totalXp;
+  state.accountQuietLastObservedCourseId = observation.currentCourseId;
+
+  const gate = await tryAcquireAccountSyncGate(client);
+  if (!gate.acquired) {
+    logger.debug("account quiet retry gate busy", { reason: gate.reason });
+    enterAccountQuietMode(client, "gate_busy", observation);
+    return;
+  }
+  try {
+    state.lastSyncResult = await fullSync(client, true);
+    if (isActiveCourseConflictResult(state.lastSyncResult)) {
+      enterAccountQuietMode(client, "active_course_conflict");
+      return;
+    }
+    if (state.automaticCycleReason === "nightly") {
+      state.lastNightlyAtMs = Date.now();
+    }
+    exitFastMode();
+  } catch (err) {
+    logger.warn("automatic cycle retry failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    enterAccountQuietMode(client, "retry_error", observation);
+  } finally {
+    await gate.release();
+  }
+}
+
+async function readAccountObservation(client: DuolingoClient): Promise<AccountObservation | null> {
+  try {
+    const user = await client.getUser();
+    return { totalXp: user.totalXp, currentCourseId: user.currentCourseId };
+  } catch (err) {
+    logger.debug("account quiet observation failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+function accountObservationChanged(
+  state: ReturnType<typeof getPollingState>,
+  observation: AccountObservation,
+): boolean {
+  return (
+    (state.fastLastObservedXp !== null && observation.totalXp !== state.fastLastObservedXp)
+    || (state.accountQuietLastObservedCourseId !== null
+      && observation.currentCourseId !== state.accountQuietLastObservedCourseId)
+  );
 }
 
 /** @internal tests */
@@ -267,45 +409,37 @@ export async function __runFastTickForTests(client: DuolingoClient): Promise<voi
   await fastTick(client);
 }
 
+/** @internal tests */
+export async function __runNightlyTickForTests(client: DuolingoClient): Promise<void> {
+  await nightlyTick(client);
+}
+
 /**
- * Runs at 02:00 local time. Decision logic:
+ * Runs at the configured local time. Decision logic:
  *  - If isRunning → skip and re-arm. (Quiet-detector / manual is already
  *    taking care of things.)
- *  - Else quickCheck. If XP changed vs last successful full sync, user was
- *    active around 2 a.m.; enter fast mode (if not already) and let the
- *    quiet-detector run the sync once XP stops. Do not force a fullSync.
- *  - If XP unchanged → run fullSync(client, cycleAll=true). This covers
- *    truly idle days and days where the last active-sync landed hours ago.
+ *  - Else quickCheck to seed account-quiet monitoring cheaply.
+ *  - Automatic cycle-all always goes through the same account-quiet gate:
+ *    XP and active course must both stay stable, then jitter runs, then a
+ *    final observation happens before acquiring the sync gate.
  */
 async function nightlyTick(client: DuolingoClient): Promise<void> {
   const state = getPollingState();
   try {
     if (state.isRunning) return;
+    logger.info("nightly tick");
 
-    let changed: boolean;
     let currentXp: number;
     try {
       const res = await quickCheck(client);
-      changed = res.changed;
       currentXp = res.currentXp;
     } catch {
       return;
     }
 
-    if (changed) {
-      if (state.mode === "baseline") enterFastMode(currentXp);
+    if (state.mode === "baseline") {
+      enterAccountQuietMode(client, "nightly", { totalXp: currentXp });
       return;
-    }
-
-    const gate = await tryAcquireAccountSyncGate(client);
-    if (!gate.acquired) return;
-    try {
-      state.lastSyncResult = await fullSync(client, true);
-      state.lastNightlyAtMs = Date.now();
-    } catch {
-      // logged inside fullSync
-    } finally {
-      await gate.release();
     }
   } finally {
     scheduleNightly(client);
@@ -319,6 +453,7 @@ function scheduleNightly(client: DuolingoClient): void {
     state.nightlyTimer = null;
   }
   const delay = msUntilNextLocalTime(effectiveNightlyHour());
+  logger.debug("nightly scheduled", { delayMs: delay });
   state.nightlyTimer = setTimeout(() => {
     state.nightlyTimer = null;
     void nightlyTick(client);
@@ -331,6 +466,7 @@ export function startPolling(client: DuolingoClient): void {
   const state = getPollingState();
   state.client = client;
   if (state.baselineTimer) return;
+  logger.info("polling start");
 
   state.baselineTimer = setInterval(() => {
     void baselineTick(client);
@@ -354,6 +490,7 @@ export function stopPolling(): void {
     clearInterval(state.fastTimer);
     state.fastTimer = null;
   }
+  clearAccountQuietJitter();
   if (state.nightlyTimer) {
     clearTimeout(state.nightlyTimer);
     state.nightlyTimer = null;
@@ -361,6 +498,8 @@ export function stopPolling(): void {
   state.mode = "baseline";
   state.fastLastObservedXp = null;
   state.fastConsecutiveIdleTicks = 0;
+  state.accountQuietLastObservedCourseId = null;
+  state.automaticCycleReason = null;
 }
 
 export async function manualRefresh(client: DuolingoClient): Promise<SyncResult & { cooldownRemaining?: number }> {
@@ -407,9 +546,22 @@ export function isCurrentlyRunning(): boolean {
 export type SyncTimingStatus = {
   msUntilNextXpCheck: number | null;
   msUntilNextNightlySync: number | null;
-  syncMode: SyncMode;
+  syncMode: RuntimeSyncMode;
   fastIdleTicks: number;
   fastIdleTicksRequired: number;
+  courseConflict: {
+    active: boolean;
+    lastObservedCourseId: string | null;
+    jitterUntilMs: number | null;
+    msUntilJitterRetry: number | null;
+  };
+  accountQuiet: {
+    active: boolean;
+    reason: AutomaticCycleReason | null;
+    lastObservedCourseId: string | null;
+    jitterUntilMs: number | null;
+    msUntilJitterRetry: number | null;
+  };
 };
 
 export function getSyncTimingStatus(): SyncTimingStatus {
@@ -419,7 +571,7 @@ export function getSyncTimingStatus(): SyncTimingStatus {
   // In fast mode we don't track a per-tick timestamp; the best estimate is
   // "within FAST_POLL_MS". In baseline we derive from lastBaselineTickAtMs.
   let msUntilNextXpCheck: number | null = null;
-  if (state.mode === "fast") {
+  if ((state.mode === "fast" || state.mode === "course_conflict") && state.fastTimer !== null) {
     msUntilNextXpCheck = FAST_POLL_MS;
   } else if (state.lastBaselineTickAtMs !== null) {
     msUntilNextXpCheck = Math.max(0, state.lastBaselineTickAtMs + BASELINE_POLL_MS - now);
@@ -436,6 +588,23 @@ export function getSyncTimingStatus(): SyncTimingStatus {
     syncMode: state.mode,
     fastIdleTicks: state.fastConsecutiveIdleTicks,
     fastIdleTicksRequired: FAST_IDLE_TRIGGER_TICKS,
+    courseConflict: {
+      active: state.mode === "course_conflict",
+      lastObservedCourseId: state.accountQuietLastObservedCourseId,
+      jitterUntilMs: state.accountQuietJitterUntilMs,
+      msUntilJitterRetry: state.accountQuietJitterUntilMs === null
+        ? null
+        : Math.max(0, state.accountQuietJitterUntilMs - now),
+    },
+    accountQuiet: {
+      active: state.mode === "fast" || state.mode === "course_conflict",
+      reason: state.automaticCycleReason,
+      lastObservedCourseId: state.accountQuietLastObservedCourseId,
+      jitterUntilMs: state.accountQuietJitterUntilMs,
+      msUntilJitterRetry: state.accountQuietJitterUntilMs === null
+        ? null
+        : Math.max(0, state.accountQuietJitterUntilMs - now),
+    },
   };
 }
 
@@ -461,7 +630,7 @@ export function rescheduleNightly(): void {
 export function notifyAllCourseSyncComplete(): void {
   const state = getPollingState();
   state.lastNightlyAtMs = Date.now();
-  if (state.mode === "fast") {
+  if (state.mode === "fast" || state.mode === "course_conflict") {
     exitFastMode();
   }
 }
@@ -476,4 +645,7 @@ export function resetPollingStateForTests(): void {
   state.lastManualRefreshAtMs = 0;
   state.lastSyncResult = null;
   state.client = null;
+  state.accountQuietLastObservedCourseId = null;
+  state.accountQuietJitterUntilMs = null;
+  state.automaticCycleReason = null;
 }

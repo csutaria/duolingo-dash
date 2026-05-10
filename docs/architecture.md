@@ -28,12 +28,10 @@ Browser (Next.js client) ─► Next.js API routes (server) ─► duolingo.com
 
 1. **Never** run a full all-course cycle sync while the user is actively practicing. The cycle switches Duolingo's active course account-wide.
 2. **Baseline XP check every 30 min.** Cheap `totalXp` read. No full sync is triggered directly from baseline.
-3. **Quiet-detector (fast mode)**: when baseline sees XP changed vs last full sync, start polling `totalXp` every 2 min.
-   - Any observed XP change → immediately return to baseline. Do **not** extend fast mode.
-   - 5 consecutive unchanged fast ticks (10 min of quiet) → fire `fullSync(cycleAll=true)` → return to baseline.
-4. **Nightly once at the configured hour in the resolved timezone (R).** Default `02:00`; configurable via the SyncBar selector (persisted to `app_settings.nightly_hour`). `quickCheck` first:
-   - If XP changed vs last full sync → enter fast mode (if not already). Do not force a sync.
-   - If XP unchanged → run `fullSync(cycleAll=true)`. Covers idle days.
+3. **Account-quiet detector (fast mode)**: when baseline sees XP changed vs last full sync, start polling account state every 2 min.
+   - Any observed XP or active-course change resets the quiet counter.
+   - 5 consecutive unchanged account observations (10 min of quiet) → wait jitter, re-check account state, then attempt `fullSync(cycleAll=true)`.
+4. **Nightly once at the configured hour in the resolved timezone (R).** Default `23:00`; configurable via the SyncBar selector (persisted to `app_settings.nightly_hour`). Nightly seeds the same account-quiet detector instead of bypassing it, so automatic cycle-all has one readiness gate regardless of trigger.
 5. **Pause** stops all three: baseline, fast, nightly. Pause is in-memory only — process restart always resumes polling.
 6. **HMR safety**: all mutable polling state lives on a shared `globalThis.__duolingoPollingState` bucket so Next.js dev reloads don't orphan timers.
 7. **Single-flight**: `isRunning` on the shared bucket, claimed through
@@ -51,11 +49,12 @@ Browser (Next.js client) ─► Next.js API routes (server) ─► duolingo.com
 | `client`                                                        | `DuolingoClient` singleton                                 | Yes                       |
 | `userPaused`                                                    | User has clicked Pause in the UI                           | **Yes, by design**        |
 | `baselineTimer`                                                 | 30-min `setInterval` handle                                | Yes                       |
-| `fastTimer`                                                     | 2-min `setInterval` handle (only while `mode === "fast"`)  | Yes                       |
-| `nightlyTimer`                                                  | Next 02:00 `setTimeout` handle (chained)                   | Yes                       |
+| `fastTimer`                                                     | 2-min account-quiet `setInterval` handle (`mode === "fast"` or `"course_conflict"`) | Yes                       |
+| `accountQuietJitterTimer`                                       | 30-120 s jitter `setTimeout` before automatic cycle retry  | Yes                       |
+| `nightlyTimer`                                                  | Next configured-hour `setTimeout` handle (chained)         | Yes                       |
 | `isRunning`                                                     | Global single-flight mutex                                 | Yes                       |
-| `mode`                                                          | `"baseline"` or `"fast"`                                   | Yes                       |
-| `fastLastObservedXp` / `fastConsecutiveIdleTicks`               | Fast-mode bookkeeping                                      | Yes                       |
+| `mode`                                                          | `"baseline"`, `"fast"`, or `"course_conflict"`             | Yes                       |
+| `fastLastObservedXp` / `fastConsecutiveIdleTicks` / `accountQuietLastObservedCourseId` / `automaticCycleReason` | Account-quiet bookkeeping | Yes                       |
 | `lastBaselineTickAtMs` / `lastNightlyAtMs` / `lastManualRefreshAtMs` | Timing for cadence + cooldown                         | Yes                       |
 | `lastSyncResult`                                                | Most recent `SyncResult` for UI                            | Yes                       |
 | `currentSync` (in `sync-state.ts`, separate)                    | `{ type, startedAtMs }` for an active `fullSync`           | Yes                       |
@@ -87,9 +86,9 @@ Rules:
 
 ### UTC-host deployment note
 
-If you deploy on a server configured to UTC, that only fixes **S**. It does **not** automatically mean "02:00 in your local timezone."
+If you deploy on a server configured to UTC, that only fixes **S**. It does **not** automatically mean "23:00 in your local timezone."
 
-- Without an override, `DUOLINGO_TZ`, or a persisted profile timezone, `R` falls through to `S=UTC` and nightly runs happen at **02:00 UTC**.
+- Without an override, `DUOLINGO_TZ`, or a persisted profile timezone, `R` falls through to `S=UTC` and nightly runs happen at **23:00 UTC**.
 - The fastest fix without a redeploy is the SyncBar "Override" input: set it to your IANA zone (e.g. `America/Los_Angeles`) and the resolver, the nightly scheduler, and every "which day" query pick it up immediately. Persisted in `app_settings.timezone_override`; survives process restarts.
 - For headless / pre-login configuration, set `DUOLINGO_TZ=America/Los_Angeles` in the environment.
 
@@ -126,7 +125,7 @@ Single-row (`id = 1`) SQLite table for user-editable preferences. Helpers in `sr
 
 | Column              | Type      | Default fallthrough                                | Consumer                                              |
 | ------------------- | --------- | -------------------------------------------------- | ----------------------------------------------------- |
-| `nightly_hour`      | INTEGER 0..23 | `null` → 2 (legacy `NIGHTLY_HOUR_DEFAULT`)         | `effectiveNightlyHour()` in `polling.ts`              |
+| `nightly_hour`      | INTEGER 0..23 | `null` → 23 (`NIGHTLY_HOUR_DEFAULT`)               | `effectiveNightlyHour()` in `polling.ts`              |
 | `timezone_override` | TEXT (IANA)   | `null` → resolver chain (env → profile → host)     | `setSettingsTimezoneLoader()` in `tz.ts` (top of priority chain) |
 | `updated_at`        | TEXT      | `datetime('now')`                                  | Audit only                                            |
 
@@ -145,10 +144,10 @@ Notes:
 ```
 app_settings.nightly_hour (UI)  ─┐
                                  ├─► effectiveNightlyHour()  ──►  msUntilNextLocalTime(h, R)
-NIGHTLY_HOUR_DEFAULT (= 2)  ─────┘
+NIGHTLY_HOUR_DEFAULT (= 23) ─────┘
 ```
 
-- `effectiveNightlyHour()` validates the stored value is an integer in `0..23`; out-of-range / non-integer / DB-missing → `NIGHTLY_HOUR_DEFAULT` (2).
+- `effectiveNightlyHour()` validates the stored value is an integer in `0..23`; out-of-range / non-integer / DB-missing → `NIGHTLY_HOUR_DEFAULT` (23).
 - The hour is interpreted in **R** (resolved zone), not S — see `msUntilNextLocalTime` and the Timezone model section above. Changing the hour does **not** change the zone.
 - `POST /api/settings { "nightlyHour": 7 }` triggers `updateAppSettings({ nightly_hour: 7 })` then `rescheduleNightly()`. The latter no-ops if there is no live client (e.g. paused before resume).
 - `GET /api/status` reports the effective hour as `nightlyHour` (always present in non-DEMO responses, including read-only). The UI surfaces it as a `<select>` next to "Next nightly sync" in the SyncBar status panel.
@@ -183,7 +182,7 @@ Activated by env: `DUOLINGO_READ_ONLY=1` (also `true`/`yes`, case-insensitive). 
 | `POST /api/sync` | Returns `503 { "error": "read-only" }`. |
 | `POST /api/sync-course` | Returns `503 { "error": "read-only" }`. |
 | `POST /api/polling` | Returns `503 { "error": "read-only" }`. |
-| `GET /api/status` | Returns the **same shape** as the normal-mode payload, with sentinel values for fields that don't apply: `readOnly: true`, `instanceRole: "read-only"`, `authenticated: false`, `polling: false`, `paused: false`, `currentlyRunning: false`, `currentSync: null`, `localSyncState: { isRunning: false, currentSync: null }`, `expectedDurationMs: { single: null, cycle: null }`, `lastSyncResult: null`, `msUntilNextXpCheck: null`, `msUntilNextNightlySync: null`, `syncMode: "baseline"`, `fastIdleTicks: 0`, `fastIdleTicksRequired: 5`. `dbStatus`, `resolvedTimezone`, `resolvedTimezoneSource`, `timezoneOverride`, `nightlyHour`, and `externalSyncLockConfigured` are real values read at request time. The shape parity is intentional — the UI takes one render path for both modes. `getAppSettings()` is read-defensive when the table is missing on an un-migrated DB. |
+| `GET /api/status` | Returns the **same shape** as the normal-mode payload, with sentinel values for fields that don't apply: `readOnly: true`, `instanceRole: "read-only"`, `authenticated: false`, `polling: false`, `paused: false`, `currentlyRunning: false`, `currentSync: null`, `localSyncState: { isRunning: false, currentSync: null }`, `expectedDurationMs: { single: null, cycle: null }`, `lastSyncResult: null`, `msUntilNextXpCheck: null`, `msUntilNextNightlySync: null`, `syncMode: "baseline"`, `fastIdleTicks: 0`, `fastIdleTicksRequired: 5`, `accountQuiet: { active: false, reason: null, lastObservedCourseId: null, jitterUntilMs: null, msUntilJitterRetry: null }`, `courseConflict: { active: false, lastObservedCourseId: null, jitterUntilMs: null, msUntilJitterRetry: null }`. `dbStatus`, `resolvedTimezone`, `resolvedTimezoneSource`, `timezoneOverride`, `nightlyHour`, and `externalSyncLockConfigured` are real values read at request time. The shape parity is intentional — the UI takes one render path for both modes. `getAppSettings()` is read-defensive when the table is missing on an un-migrated DB. |
 | `SyncBar` UI | Renders a blue **"Read-only"** pill in place of Refresh / Sync All. The status panel shows "Display-only instance. Writes are disabled." instead of the pause toggle. The `Last sync` row + Timezone row still render from `dbStatus`. |
 
 Caveats and follow-ups (these are why this is a "display" mode, not "follower" mode):
@@ -201,18 +200,20 @@ See `README.md` § "Running a display-only second instance" for the user-facing 
 
 | Timer           | Kind                 | Cadence                             | What it does                                                                                                              |
 | --------------- | -------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `baselineTimer` | `setInterval`        | 30 min                              | `baselineTick`: `quickCheck`. If XP changed vs last sync and in baseline mode → enter fast mode. Never fires `fullSync`. |
-| `fastTimer`     | `setInterval`        | 2 min (only while `mode === "fast"`) | `fastTick`: `getTotalXp`. Any change → revert to baseline. 5 unchanged ticks → `fullSync(cycleAll=true)` → revert.       |
-| `nightlyTimer`  | chained `setTimeout` | next `effectiveNightlyHour():00` in R | `nightlyTick`: `quickCheck`. Changed → enter fast mode (no sync). Unchanged → `fullSync(cycleAll=true)`. Re-arms with the current setting (UI changes take effect on the next arming or via `rescheduleNightly()`).        |
+| `baselineTimer` | `setInterval`        | 30 min                              | `baselineTick`: cheap `quickCheck`. If XP changed vs last sync and in baseline mode → enter account-quiet fast mode. Never fires `fullSync`. |
+| `fastTimer`     | `setInterval`        | 2 min (while automatic account-quiet monitoring is active) | `fastTick`: `getUser` for total XP + active course. Any change resets the quiet counter. 5 unchanged ticks → jitter + final precheck + `fullSync(cycleAll=true)`. |
+| `nightlyTimer`  | chained `setTimeout` | next `effectiveNightlyHour():00` in R | `nightlyTick`: `quickCheck` to seed account-quiet fast mode. Re-arms with the current setting (UI changes take effect on the next arming or via `rescheduleNightly()`). |
 
 
 State transitions (pure, unit-tested as `advanceSyncState`):
 
 ```
   baseline ──(baseline_tick, changed)──▶ fast (idle=0)
-  fast ─────(fast_tick, changed)──────▶ baseline          // boots back to slow; no extension
-  fast ─────(fast_tick, no-change)────▶ fast (idle++)
-  fast ─────(5th no-change tick)──────▶ baseline + fire fullSync
+  fast ─────(XP/course changed)───────▶ fast (idle=0)
+  fast ─────(XP/course unchanged)─────▶ fast (idle++)
+  fast ─────(5th unchanged tick)──────▶ jitter 30–120s + precheck + cycle
+  cycle ────(active-course conflict)──▶ course_conflict (same detector)
+  retry ────(gate busy / precheck changed)─▶ fast (same detector)
   any  ─────(external_fullsync_done)──▶ baseline
 ```
 
@@ -231,18 +232,33 @@ Guards:
   lock. If the external lock is configured but unavailable, mutations fail
   closed with a skipped/error response instead of risking overlapping
   course switches.
-- Fast-mode quiet-detector retries are preserved: if the 5th quiet tick wants
-  to fire `fullSync(cycleAll=true)` but another mutation owns the gate, fast
-  mode remains active so the next 2-minute tick can try again.
+- Automatic cycle-all has a single account-quiet readiness gate. Baseline XP
+  changes, nightly triggers, previous active-course conflicts, gate contention,
+  and retry errors all re-enter the same detector: account XP and active course
+  must both stay stable for 5 observations. After quiet is satisfied, Dash waits
+  a random 30-120 s jitter and performs one final account observation before
+  acquiring the sync gate. Gate-busy, final-precheck changes, or another drift
+  send it back to monitoring. Manual sync routes return conflicts immediately
+  and do not schedule retry.
 - `startPolling` is idempotent: `if (state.baselineTimer) return;` — re-entrant calls (HMR, multiple `ensureClient`s) are no-ops.
 - Kickoff `baselineTick` runs once on start, but **only if** `isRunning === false` **and** `getCurrentSync() == null` (regression guard, commit 84935f3).
 - `manualRefresh` keeps its 30 s cooldown and respects `isRunning`.
 - `/api/sync` (any `force=true` or `manualRefresh` success) calls `notifyAllCourseSyncComplete()`, which resets fast-mode state so the detector doesn't re-trigger on the data the manual sync just landed.
 
+Logging:
+
+- `src/lib/logger.ts` writes lightweight server logs. `LOG_LEVEL` accepts
+  `debug`, `info`, `warn`, `error`, or `silent`; the default is `debug` in
+  `NODE_ENV=development` and `info` otherwise.
+- Debug/info logs cover timer triggers, quiet-detector transitions, sync
+  start/end/abort, gate and external-lock outcomes, course switches, drift
+  detection, skipped drift-tainted writes, restore decisions, and jitter
+  delays. Countdown ticks, JWTs, and secrets are intentionally not logged.
+
 ```
   startPolling(client)
   ├── setInterval(baselineTick, 30m)
-  ├── setTimeout(nightlyTick, msUntilNextLocalTime(2))      // next 02:00 in R; chained
+  ├── setTimeout(nightlyTick, msUntilNextLocalTime(effectiveNightlyHour())) // next configured hour in R; chained
   ├── (fastTimer armed on demand when baseline detects change)
   └── if (!isRunning && currentSync == null) kickoff baselineTick
 ```
@@ -260,11 +276,18 @@ Guards:
 5. Course detail:
   - `cycleAllCourses = false` → `saveLanguageDetails` for the active course only (endpoints ⑤, ⑦).
   - `cycleAllCourses = true` → `syncAllCourseDetails` cycles through every course via endpoint ⑥ (`PATCH /users/{id}`) — **this is account-wide and visible in the real Duolingo app**. Each PATCH moves its target to the top of the account's course-selector (a recency stack), and the API-returned `user.courses` array mirrors that order. The cycle visits non-active courses in **reverse of `user.courses`** and restores the active course last — the identity permutation, so the selector ends the cycle in the exact order the user started with.
-  - During course-cycling syncs, Dash records the starting active course,
-    treats its own switches as expected active-course changes, re-reads the
-    account's active course after fetch steps, and returns `warnings` if it
-    sees an unexpected course. The final restore remains best-effort and is
-    attempted even when drift is observed.
+  - During course-cycling syncs, Dash records the expected active course,
+    treats its own switches as expected active-course changes, and re-reads
+    endpoint ① before/after every switch and every active-course-dependent
+    fetch. Unexpected drift throws `ActiveCourseConflictError`, stops the sync,
+    and prevents further switches. Dash does **not** restore over another
+    actor's active course after drift.
+  - Course-dependent detail writes are drift-atomic per course. Vocab, skills
+    / path-derived details, and mistake count are collected into an in-memory
+    draft and written only after all active-course guard checks for that course
+    have passed. Ordinary endpoint failures are not atomicity failures: if
+    vocab fails while the active course stays correct, clean skill and mistake
+    data may still be written.
 6. `logSync({ syncType: "full", totalXp, success, durationMs, cycleAll })`.
 7. `clearCurrentSync()` in a `finally` — always clears, even on throw.
 
@@ -297,7 +320,7 @@ Progress is derived client-side as `min(1, elapsed / expectedDurationMs[type])` 
 
 | Route              | Method                                              | Purpose                                                                                                                                                                                             |
 | ------------------ | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/api/status`      | `GET`                                               | Auth state, `instanceRole`, `externalSyncLockConfigured`, polling on/off, `paused`, `currentlyRunning`, `currentSync`, `localSyncState`, `expectedDurationMs.{single,cycle}`, last sync result, DB status, `msUntilNextXpCheck`, `msUntilNextNightlySync`, `syncMode` (`"baseline"`/`"fast"`), `fastIdleTicks`, `fastIdleTicksRequired`, **`nightlyHour`** (effective `0..23` in **R**), **`resolvedTimezone`** (IANA **R**), **`resolvedTimezoneSource`** (`settings` / `env` / `profile` / `system`), **`timezoneOverride`** (raw stored `app_settings.timezone_override`, `null` when unset), **`readOnly`** (`true` when role is read-only). Primary source for UI polling state. |
+| `/api/status`      | `GET`                                               | Auth state, `instanceRole`, `externalSyncLockConfigured`, polling on/off, `paused`, `currentlyRunning`, `currentSync`, `localSyncState`, `expectedDurationMs.{single,cycle}`, last sync result, DB status, `msUntilNextXpCheck`, `msUntilNextNightlySync`, `syncMode` (`"baseline"`/`"fast"`/`"course_conflict"`), `fastIdleTicks`, `fastIdleTicksRequired`, `accountQuiet.{active,reason,lastObservedCourseId,jitterUntilMs,msUntilJitterRetry}`, `courseConflict.{active,lastObservedCourseId,jitterUntilMs,msUntilJitterRetry}` for the conflict-specific subset, **`nightlyHour`** (effective `0..23` in **R**), **`resolvedTimezone`** (IANA **R**), **`resolvedTimezoneSource`** (`settings` / `env` / `profile` / `system`), **`timezoneOverride`** (raw stored `app_settings.timezone_override`, `null` when unset), **`readOnly`** (`true` when role is read-only). Primary source for UI polling state. |
 | `/api/polling`     | `POST { action: "pause" | "resume" }`               | Toggle `userPaused`. Returns `{ paused, polling }`. 400 on invalid action. **503 `{ error: "read-only" }`** in read-only mode.                                                                       |
 | `/api/settings`    | `GET` / `POST`                                      | `GET` → `{ nightlyHour, timezoneOverride }` (effective `nightlyHour`, raw stored `timezoneOverride`). `POST { nightlyHour?: 0..23 \| null, timezoneOverride?: string \| null }` updates `app_settings`. Side effects: a `nightlyHour` change re-arms the nightly `setTimeout` via `rescheduleNightly()`; a `timezoneOverride` change calls `invalidateResolvedTimezone()` so R re-resolves on the next read. `timezoneOverride` is validated as a real IANA zone (via `Intl.DateTimeFormat`) — bogus strings → 400. 400 on any validation failure. **503 `{ error: "read-only" }`** in read-only mode. |
 | `/api/sync`        | `POST { force?: boolean, cycleAll?: boolean }`      | `force=false` (default): `manualRefresh` (respects cooldown + `isRunning`). `force=true`: direct `fullSync(client, cycleAll)`. **503 `{ error: "read-only" }`** in read-only mode.                  |
@@ -308,7 +331,7 @@ Progress is derived client-side as `min(1, elapsed / expectedDurationMs[type])` 
 
 In `DEMO_MODE` (env `DEMO_MODE=true`):
 
-- `/api/status` short-circuits to a small fixture payload (`{ demoMode: true, readOnly, resolvedTimezone, resolvedTimezoneSource, timezoneOverride: null }`) **without reading any DB**. None of the polling/sync/dbStatus fields are populated.
+- `/api/status` short-circuits to a small fixture payload (`{ demoMode: true, readOnly, instanceRole, externalSyncLockConfigured, resolvedTimezone, resolvedTimezoneSource, timezoneOverride: null, accountQuiet: <inactive sentinel>, courseConflict: <inactive sentinel> }`) **without reading any DB**. None of the polling/sync/dbStatus fields are populated.
 - `/api/data` reads from `data/mock.db` (seeded by `scripts/seed-mock.js`) instead of `data/duolingo.db`. The path swap happens in `getDb()` (`src/lib/db.ts`); the rest of the read pipeline is unchanged.
 - Neither route requires `DUOLINGO_JWT`.
 
