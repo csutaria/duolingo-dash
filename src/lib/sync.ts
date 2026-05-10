@@ -9,13 +9,15 @@ import {
   upsertXpDaily,
   snapshotVocab,
   snapshotSkills,
+  getLatestStoredSkillSnapshots,
   upsertAchievements,
   updateStreakEpochs,
   backfillImpliedFreeze,
+  type StoredSkillSnapshot,
 } from "./db";
 import { resolveLegacyLanguageData } from "./legacy-language-data";
 import { clearCurrentSync, setCurrentSync } from "./sync-state";
-import { DuolingoUser, XpSummary } from "./types";
+import { DuolingoUser, LegacySkill, XpSummary } from "./types";
 import { formatLocalDate, getResolvedTimezone } from "./tz";
 import { tryAcquireAccountSyncGate } from "./sync-lock";
 import {
@@ -24,6 +26,8 @@ import {
   isActiveCourseConflictError,
 } from "./sync-conflict";
 import { logger } from "./logger";
+
+type SkillSnapshotInput = Parameters<typeof snapshotSkills>[1][number];
 
 export interface SyncResult {
   type: "quick" | "full" | "skipped";
@@ -411,21 +415,91 @@ function buildPathProgressMap(sections: PathSection[]): Map<string, number> {
 }
 
 type VocabSnapshotRow = Parameters<typeof snapshotVocab>[1][number];
-type SkillSnapshotRow = Parameters<typeof snapshotSkills>[1][number];
 
 type CourseDetailDraft = {
   vocab: VocabSnapshotRow[] | null;
-  skills: SkillSnapshotRow[] | null;
+  skills: SkillSnapshotInput[] | null;
   mistakeCount: number | null;
 };
+
+type CourseDetailSaveResult = {
+  skillCount: number | null;
+  skillSource: "legacy" | "stored" | null;
+};
+
+function parseStringArray(value: unknown): string[] {
+  if (typeof value !== "string" || value.trim() === "") return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is string => typeof item === "string");
+  } catch {
+    return [];
+  }
+}
+
+function mapLegacySkills(
+  skills: LegacySkill[],
+  pathProgress: Map<string, number>,
+): SkillSnapshotInput[] {
+  return skills.map((s) => {
+    const levelsFinished = pathProgress.get(s.id) ?? s.levels_finished ?? s.finishedLevels ?? 0;
+    return {
+      skill_id: s.id,
+      skill_name: s.name,
+      learned: levelsFinished >= 4 || s.learned,
+      strength: s.strength ?? 0,
+      words: s.words ?? [],
+      levels_finished: levelsFinished,
+      coords_x: s.coords_x ?? 0,
+      coords_y: s.coords_y ?? 0,
+      dependencies: s.dependencies ?? [],
+    };
+  });
+}
+
+function mapStoredSkills(
+  skills: StoredSkillSnapshot[],
+  pathProgress: Map<string, number>,
+): SkillSnapshotInput[] {
+  return skills.map((s) => {
+    const levelsFinished = pathProgress.get(s.skill_id) ?? Number(s.levels_finished || 0);
+    return {
+      skill_id: s.skill_id,
+      skill_name: s.skill_name,
+      learned: levelsFinished >= 4 || Number(s.learned || 0) === 1,
+      strength: Number(s.strength || 0),
+      words: parseStringArray(s.words_json),
+      levels_finished: levelsFinished,
+      coords_x: Number(s.coords_x || 0),
+      coords_y: Number(s.coords_y || 0),
+      dependencies: parseStringArray(s.dependencies_json),
+    };
+  });
+}
+
+function buildSkillSnapshotInputs(
+  courseId: string,
+  legacySkills: LegacySkill[] | undefined,
+  pathProgress: Map<string, number>,
+): { source: "legacy" | "stored"; skills: SkillSnapshotInput[] } | null {
+  if (legacySkills && legacySkills.length > 0) {
+    return { source: "legacy", skills: mapLegacySkills(legacySkills, pathProgress) };
+  }
+
+  const storedSkills = getLatestStoredSkillSnapshots(courseId);
+  if (storedSkills.length === 0) return null;
+  return { source: "stored", skills: mapStoredSkills(storedSkills, pathProgress) };
+}
 
 async function saveLanguageDetails(
   client: DuolingoClient,
   courseId: string,
   learningLanguage: string,
   guard?: ActiveCourseGuard,
-): Promise<void> {
+): Promise<CourseDetailSaveResult> {
   const draft: CourseDetailDraft = { vocab: null, skills: null, mistakeCount: null };
+  const result: CourseDetailSaveResult = { skillCount: null, skillSource: null };
 
   try {
     try {
@@ -461,18 +535,11 @@ async function saveLanguageDetails(
       await guard?.check(`after ${courseId} skill fetch`);
       const pathProgress = buildPathProgressMap(pathSections);
       const langData = resolveLegacyLanguageData(legacy, learningLanguage);
-      if (langData?.skills) {
-        draft.skills = langData.skills.map((s) => ({
-          skill_id: s.id,
-          skill_name: s.name,
-          learned: s.learned,
-          strength: s.strength ?? 0,
-          words: s.words ?? [],
-          levels_finished: pathProgress.get(s.id) ?? s.levels_finished ?? s.finishedLevels ?? 0,
-          coords_x: s.coords_x ?? 0,
-          coords_y: s.coords_y ?? 0,
-          dependencies: s.dependencies ?? [],
-        }));
+      const snapshot = buildSkillSnapshotInputs(courseId, langData?.skills, pathProgress);
+      if (snapshot) {
+        draft.skills = snapshot.skills;
+        result.skillCount = snapshot.skills.length;
+        result.skillSource = snapshot.source;
       }
     } catch (err) {
       if (isActiveCourseConflictError(err)) throw err;
@@ -501,6 +568,7 @@ async function saveLanguageDetails(
 
     await guard?.check(`before saving ${courseId} details`);
     saveCourseDetailDraft(courseId, draft);
+    return result;
   } catch (err) {
     if (isActiveCourseConflictError(err)) {
       logger.warn("course detail writes skipped after active course drift", {
@@ -563,8 +631,15 @@ export async function syncCourseDetails(
       details.push(`Already on ${courseId}, no switch needed`);
     }
 
-    await saveLanguageDetails(client, courseId, learningLanguage, guard);
+    const savedDetails = await saveLanguageDetails(client, courseId, learningLanguage, guard);
     details.push(`Saved course details for ${courseId}`);
+    if (savedDetails.skillCount != null && savedDetails.skillSource) {
+      const source =
+        savedDetails.skillSource === "legacy"
+          ? "legacy word map + path status"
+          : "stored word map + path status";
+      details.push(`Saved ${savedDetails.skillCount} skills for ${learningLanguage} (${source})`);
+    }
 
     if (needsSwitch) {
       try {

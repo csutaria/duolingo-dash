@@ -62,6 +62,8 @@ comma- or space-separated list of hostnames before starting `npm run dev`.
 
 The dashboard's goal is simple: stay current without interrupting you while you practice. An all-course cycle sync temporarily switches your active Duolingo course, so it's designed to only run when you're not actively earning XP.
 
+The Vocabulary page opens on the last course page you visited in the same browser, falls back to the active course from your local profile snapshot, then lets you switch courses locally without changing Duolingo.
+
 **Background sync, at a glance:**
 
 - **Every 30 min** — cheap XP check only, no course switching.
