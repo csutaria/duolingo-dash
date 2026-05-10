@@ -27,6 +27,7 @@
 
 # editors / IDEs
 .idea/
+.vscode/
 
 # debug
 npm-debug.log*
