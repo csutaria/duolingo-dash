@@ -21,6 +21,7 @@ Contributor-facing reference for writing tests and planning new coverage. For th
 | `queries-windowing.test.ts`    | `getCourseXpHistory` / `getCourseXpDailyHistory` row-count windowing; ideal-anchor / `_pretrack` stacks; **timezone**: `LOCAL_DATE` bucketing vs UTC evening snapshots (PT regression), `getXpDaily(N)` window anchored in R (PT + IST regressions), UTC/IST control cases |
 | `tz.test.ts`                   | Resolved zone **R** priority (settings loader → `DUOLINGO_TZ` → profile loader → system), cache invalidation, settings-loader fallthrough on null/empty/throw, `formatLocalDate` boundaries (PT/IST/UTC), `epochMsForLocalTime` / DST round-trips |
 | `sync.test.ts`                 | Null-safe XP summary mapping, null date filtering, avatar URL protocol handling                                                          |
+| `sync-skill-progress.test.ts`  | Skill sync overlays path-derived completion onto live legacy skill words, and falls back to latest stored word maps when live legacy skills are empty |
 | `legacy-language-data.test.ts` | Resolving legacy `language_data` keys (`nb`/`no`, `zh`/`zs`, inner `language`, single-key fallback)                                      |
 | `scripts.test.ts`              | Writing system classification, script skill identification, Latin/non-Latin detection, skill categorization                              |
 | `language-names.test.ts`       | Language name and flag emoji lookup, unknown language fallbacks                                                                          |
@@ -30,6 +31,8 @@ Contributor-facing reference for writing tests and planning new coverage. For th
 | `sync-lock.test.ts`            | Process-local sync single-flight gate: idle acquisition, busy rejection via `isRunning` or `currentSync`, release after success / throw, external-lock busy release of the local gate, combined local+external release |
 | `external-sync-lock.test.ts`   | Optional Redis/Valkey account lock: disabled without URL, `SET NX PX` acquire, heartbeat, owner-token release, busy response, fail-closed unavailable response |
 | `instance-role.test.ts`        | Role parsing: default `writer`, `manual`, `read-only`, and `DUOLINGO_READ_ONLY=1` compatibility |
+| `course-preferences.test.ts`   | Browser-local preferred course selection order: last visited course, active profile course, first local course                           |
+| `vocab-bundles.test.ts`        | Skill-bundle vocabulary model: status classification, defensive `words_json` parsing, course-order sorting, unique flat word rows with skill context |
 | `read-only.test.ts`            | `isReadOnlyMode()` truth table for `DUOLINGO_READ_ONLY` (1/true/yes → true; 0/false/no/empty/random → false), case insensitive |
 | `server-state.test.ts` (read-only/manual blocks) | `ensureClient` throws read-only error before checking JWT and never starts polling; `getClientOrNull` returns null without constructing a client; manual mode creates the JWT client but does not start/resume background polling |
 | `src/app/api/data/__tests__/route.test.ts` | GET `/api/data`: auth gate, `q=course-xp-history` / `course-xp-daily-history` → correct `queries.ts` arguments and JSON body passthrough (chart consumer contract at HTTP boundary) |
