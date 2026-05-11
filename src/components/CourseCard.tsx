@@ -66,17 +66,17 @@ export function CourseCard({
           : "bg-zinc-900 border border-zinc-800 hover:border-zinc-600"
       }`}
     >
-      <div className="flex items-start justify-between">
-        <div>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
           <div className="text-2xl mb-1">{flag}</div>
-          <h3 className="text-lg font-semibold text-zinc-100">{name}</h3>
+          <h3 className="break-words text-lg font-semibold text-zinc-100">{name}</h3>
           {scriptInfo && (
             <div className="text-xs text-zinc-500 mt-0.5">
               {scriptInfo.scripts.map((s) => s.name).join(", ")} ({scriptInfo.scripts.map((s) => s.type).join(", ")})
             </div>
           )}
         </div>
-        <div className="text-right">
+        <div className="shrink-0 text-right">
           {showWindowXp ? (
             <>
               <div className="text-xl font-bold text-zinc-100 tabular-nums">

@@ -24,11 +24,11 @@ export function MetaSeriesCard({
       }`}
     >
       <div className="flex items-start justify-between gap-4">
-        <div>
-          <h3 className="text-lg font-semibold text-zinc-100">{title}</h3>
+        <div className="min-w-0">
+          <h3 className="break-words text-lg font-semibold text-zinc-100">{title}</h3>
           {subtitle && <p className="text-xs text-zinc-500 mt-1">{subtitle}</p>}
         </div>
-        <div className="text-right">
+        <div className="shrink-0 text-right">
           <div className="text-xl font-bold text-zinc-100">
             {value != null && value > 0 ? value.toLocaleString() : "—"}
           </div>

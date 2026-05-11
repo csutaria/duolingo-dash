@@ -49,14 +49,14 @@ export default function VocabPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
+    <div className="space-y-5 sm:space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="min-w-0">
           <h2 className="text-xl font-bold">Vocabulary</h2>
           <p className="text-sm text-zinc-500 mt-1">Study words through the skills Duolingo already tracks.</p>
         </div>
         {courses && courses.length > 1 && (
-          <div className="flex gap-1 flex-wrap justify-end">
+          <div className="flex gap-1 overflow-x-auto pb-1 sm:flex-wrap sm:justify-end sm:overflow-visible sm:pb-0">
             {courses.map((c) => {
               const lang = String(c.learning_language);
               const flag = getLanguageFlag(lang);
@@ -122,8 +122,8 @@ function VocabContent({ courseId }: { courseId: string }) {
   const totalSkillWords = bundles.reduce((sum, bundle) => sum + bundle.wordCount, 0);
 
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+    <div className="space-y-3 sm:space-y-4">
+      <div className="grid grid-cols-4 gap-1.5 sm:gap-3 md:grid-cols-4">
         <MetricCard label="Unique Words" value={wordRows.length} />
         <MetricCard label="Skill Words" value={totalSkillWords} />
         <MetricCard label="In Progress" value={inProgress.length} />
@@ -139,7 +139,7 @@ function VocabContent({ courseId }: { courseId: string }) {
             onChange={(e) => setFilter(e.target.value)}
             className="bg-zinc-800 text-zinc-200 text-sm px-3 py-1.5 rounded border border-zinc-700 focus:border-zinc-500 outline-none w-full sm:w-64"
           />
-          <div className="flex gap-1">
+          <div className="flex max-w-full gap-1 overflow-x-auto pb-1 sm:overflow-visible sm:pb-0">
             {(["study", "skills", "words"] as const).map((v) => (
               <button
                 key={v}
@@ -150,7 +150,7 @@ function VocabContent({ courseId }: { courseId: string }) {
               </button>
             ))}
           </div>
-          <div className="flex gap-1">
+          <div className="flex max-w-full gap-1 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0">
             {(["all", ...STATUS_ORDER] as const).map((status) => (
               <button
                 key={status}
@@ -249,8 +249,8 @@ function BundleList({ bundles, compact = false }: { bundles: VocabBundle[]; comp
 
 function AllWordsTable({ rows }: { rows: VocabWordRow[] }) {
   return (
-    <div className="max-h-[620px] overflow-y-auto">
-      <table className="w-full text-sm">
+    <div className="max-h-[620px] overflow-auto">
+      <table className="w-full min-w-[38rem] text-sm">
         <thead className="sticky top-0 bg-zinc-900 border-b border-zinc-800">
           <tr className="text-zinc-500 text-left">
             <th className="px-3 py-2">Word</th>
@@ -278,19 +278,19 @@ function AllWordsTable({ rows }: { rows: VocabWordRow[] }) {
 
 function MetricCard({ label, value }: { label: string; value: number }) {
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-      <div className="text-xs text-zinc-500 uppercase tracking-wide">{label}</div>
-      <div className="text-2xl font-bold text-zinc-100 mt-1">{value}</div>
+    <div className="rounded-md border border-zinc-800 bg-zinc-900 p-2 sm:rounded-lg sm:p-4">
+      <div className="text-[8px] uppercase leading-tight tracking-wide text-zinc-500 sm:text-xs">{label}</div>
+      <div className="mt-0.5 text-base font-bold leading-tight text-zinc-100 sm:mt-1 sm:text-2xl">{value}</div>
     </div>
   );
 }
 
 function StatusBadge({ status, label }: { status: VocabBundleStatus; label: string }) {
   const classes =
-    status === "complete-plus" ? "bg-yellow-900/50 text-yellow-300" :
-    status === "complete" ? "bg-green-900/50 text-green-400" :
-    status === "in-progress" ? "bg-blue-900/40 text-blue-400" :
-    "bg-zinc-800 text-zinc-500";
+    status === "complete-plus" ? "border border-yellow-200 bg-yellow-50 text-yellow-800" :
+    status === "complete" ? "border border-green-200 bg-green-50 text-green-700" :
+    status === "in-progress" ? "border border-blue-200 bg-blue-50 text-blue-700" :
+    "border border-zinc-800 bg-zinc-950 text-zinc-500";
 
   return <span className={`text-xs px-2 py-0.5 rounded ${classes}`}>{label}</span>;
 }

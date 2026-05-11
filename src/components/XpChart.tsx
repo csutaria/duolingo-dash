@@ -46,13 +46,7 @@ export function XpChart({ data, dataKey = "gained_xp", height = 300, domainStart
   return (
     <ResponsiveContainer width="100%" height={height}>
       <AreaChart data={withTime} margin={{ top: 5, right: 30, left: 0, bottom: 5 }}>
-        <defs>
-          <linearGradient id="xpGradient" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%" stopColor="#58cc02" stopOpacity={0.3} />
-            <stop offset="95%" stopColor="#58cc02" stopOpacity={0} />
-          </linearGradient>
-        </defs>
-        <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+        <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" />
         <XAxis
           dataKey="_t"
           type="number"
@@ -66,11 +60,12 @@ export function XpChart({ data, dataKey = "gained_xp", height = 300, domainStart
         <Tooltip
           wrapperStyle={{ zIndex: 50 }}
           contentStyle={{
-            backgroundColor: "#18181b",
-            border: "1px solid #27272a",
+            backgroundColor: "#ffffff",
+            border: "1px solid #d4d4d8",
             borderRadius: "6px",
-            color: "#e4e4e7",
+            color: "#18181b",
             fontSize: 12,
+            boxShadow: "0 10px 24px rgba(24,24,27,0.12)",
           }}
           labelFormatter={(ts) => {
             const d = new Date(Number(ts));
@@ -81,8 +76,8 @@ export function XpChart({ data, dataKey = "gained_xp", height = 300, domainStart
           type="monotone"
           dataKey={dataKey}
           stroke="#58cc02"
-          fill="url(#xpGradient)"
-          strokeWidth={2}
+          fill="#58cc02"
+          strokeWidth={2.5}
           isAnimationActive={false}
         />
       </AreaChart>

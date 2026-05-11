@@ -38,13 +38,13 @@ function Avatar({ picture, name, username }: { picture: unknown; name: unknown; 
         src={src}
         alt=""
         onError={() => setErrored(true)}
-        className="w-16 h-16 rounded-full border-2 border-zinc-700 bg-zinc-800 object-cover"
+        className="h-12 w-12 rounded-full border-2 border-zinc-700 bg-zinc-800 object-cover sm:h-16 sm:w-16"
       />
     );
   }
   return (
     <div
-      className="w-16 h-16 rounded-full border-2 border-zinc-700 bg-zinc-800 flex items-center justify-center text-zinc-200 text-xl font-semibold"
+      className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-zinc-700 bg-zinc-800 text-lg font-semibold text-zinc-200 sm:h-16 sm:w-16 sm:text-xl"
       aria-hidden
     >
       {initialsFor(name, username)}
@@ -162,16 +162,16 @@ export default function Overview() {
     : 0;
 
   return (
-    <div className="space-y-8">
-      <section className="flex items-center gap-4">
+    <div className="space-y-5 sm:space-y-8">
+      <section className="flex items-center gap-3 sm:gap-4">
         <Avatar
           picture={profile.picture}
           name={profile.name}
           username={profile.username}
         />
-        <div>
-          <h2 className="text-2xl font-bold">{String(profile.name || profile.username)}</h2>
-          <p className="text-sm text-zinc-500">
+        <div className="min-w-0">
+          <h2 className="break-words text-xl font-bold sm:text-2xl">{String(profile.name || profile.username)}</h2>
+          <p className="text-xs text-zinc-500 sm:text-sm">
             @{String(profile.username)} · Member since {memberSince}
             {profile.has_plus ? " · Plus" : ""}
           </p>
@@ -179,7 +179,7 @@ export default function Overview() {
       </section>
 
       <section>
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
+        <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-3 sm:gap-2 md:grid-cols-4 lg:grid-cols-6">
           <StatCard
             compact
             label="Streak"
@@ -224,9 +224,9 @@ export default function Overview() {
 
       {dailyData && (
         <section>
-          <div className="flex items-center justify-between mb-3">
+          <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h3 className="text-lg font-semibold">Daily XP</h3>
-            <div className="flex gap-1">
+            <div className="flex gap-1 overflow-x-auto pb-1 sm:overflow-visible sm:pb-0">
               {XP_WINDOW_OPTIONS.map((r) => (
                 <button
                   key={r.value}

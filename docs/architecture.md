@@ -185,7 +185,7 @@ Activated by env: `DUOLINGO_READ_ONLY=1` (also `true`/`yes`, case-insensitive). 
 | `POST /api/sync-course` | Returns `503 { "error": "read-only" }`. |
 | `POST /api/polling` | Returns `503 { "error": "read-only" }`. |
 | `GET /api/status` | Returns the **same shape** as the normal-mode payload, with sentinel values for fields that don't apply: `readOnly: true`, `instanceRole: "read-only"`, `authenticated: false`, `polling: false`, `paused: false`, `currentlyRunning: false`, `currentSync: null`, `localSyncState: { isRunning: false, currentSync: null }`, `expectedDurationMs: { single: null, cycle: null }`, `lastSyncResult: null`, `msUntilNextXpCheck: null`, `msUntilNextNightlySync: null`, `syncMode: "baseline"`, `fastIdleTicks: 0`, `fastIdleTicksRequired: 5`, `accountQuiet: { active: false, reason: null, lastObservedCourseId: null, jitterUntilMs: null, msUntilJitterRetry: null }`, `courseConflict: { active: false, lastObservedCourseId: null, jitterUntilMs: null, msUntilJitterRetry: null }`. `dbStatus`, `resolvedTimezone`, `resolvedTimezoneSource`, `timezoneOverride`, `nightlyHour`, and `externalSyncLockConfigured` are real values read at request time. The shape parity is intentional — the UI takes one render path for both modes. `getAppSettings()` is read-defensive when the table is missing on an un-migrated DB. |
-| `SyncBar` UI | Renders a blue **"Read-only"** pill in place of Refresh / Sync All. The status panel shows "Display-only instance. Writes are disabled." instead of the pause toggle. The `Last sync` row + Timezone row still render from `dbStatus`. |
+| `SyncBar` UI | Renders a blue **"Read-only"** pill in the header and hides Refresh / Sync All from the status panel. The status panel shows "Display-only instance. Writes are disabled." instead of the manual sync and pause controls. The `Last sync` row + Timezone row still render from `dbStatus`. |
 
 Caveats and follow-ups (these are why this is a "display" mode, not "follower" mode):
 
@@ -341,7 +341,7 @@ In `DEMO_MODE` (env `DEMO_MODE=true`):
 
 - `pauseUserPolling()` sets `userPaused = true` and calls `stopPolling()` — clears baseline, fast (if active), and nightly.
 - `resumeUserPolling()` sets `userPaused = false` and calls `startPolling(client)` if a client exists and polling isn't already running.
-- Manual `/api/sync` (Refresh and Sync All Languages) still works while paused. Its activity surfaces in `currentSync` + UI badge.
+- Manual `/api/sync` (Refresh and Sync All Languages from the status panel) still works while paused. Its activity surfaces in `currentSync` + UI badge.
 - Pause is **not persisted**. Process restart resumes normal polling. This guarantees nightly coverage on a long-lived self-hosted process even if the user forgets to un-pause.
 
 Pause does not: call Duolingo directly, touch the real Duolingo app or account, or block manual refreshes.

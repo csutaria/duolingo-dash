@@ -223,15 +223,7 @@ export function StackedXpChart({
     <div>
       <ResponsiveContainer width="100%" height={height}>
         <ComposedChart data={withTime} margin={{ top: 5, right: 16, left: 0, bottom: 5 }}>
-          <defs>
-            {sortedIds.map((id) => (
-              <linearGradient key={id} id={`sg-${id}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={colors[id]} stopOpacity={0.55} />
-                <stop offset="95%" stopColor={colors[id]} stopOpacity={0.15} />
-              </linearGradient>
-            ))}
-          </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+          <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" />
           <XAxis
             dataKey="_t"
             type="number"
@@ -302,15 +294,16 @@ export function StackedXpChart({
               return (
                 <div
                   style={{
-                    backgroundColor: "#18181b",
-                    border: "1px solid #27272a",
+                    backgroundColor: "#ffffff",
+                    border: "1px solid #d4d4d8",
                     borderRadius: 6,
-                    color: "#e4e4e7",
+                    color: "#18181b",
                     fontSize: 11,
                     padding: "6px 10px",
+                    boxShadow: "0 10px 24px rgba(24,24,27,0.12)",
                   }}
                 >
-                  <div style={{ marginBottom: 4, color: "#a1a1aa" }}>{dateLabel}</div>
+                  <div style={{ marginBottom: 4, color: "#71717a" }}>{dateLabel}</div>
                   {items.map((it) => (
                     <div
                       key={it.k}
@@ -350,7 +343,7 @@ export function StackedXpChart({
             dataKey="_prior"
             stackId="xp"
             stroke="transparent"
-            fill="#18181b"
+            fill="#ffffff"
             fillOpacity={1}
             strokeWidth={0}
             dot={false}
@@ -366,9 +359,9 @@ export function StackedXpChart({
             type="linear"
             dataKey="_pretrack"
             stackId="xp"
-            stroke="#52525b"
-            fill="#3f3f46"
-            fillOpacity={0.55}
+            stroke="#a1a1aa"
+            fill="#d4d4d8"
+            fillOpacity={1}
             strokeWidth={1}
             dot={false}
             isAnimationActive={false}
@@ -382,8 +375,8 @@ export function StackedXpChart({
               dataKey={id}
               stackId="xp"
               stroke={colors[id]}
-              fill={`url(#sg-${id})`}
-              strokeWidth={1}
+              fill={colors[id]}
+              strokeWidth={2}
               dot={false}
               isAnimationActive={false}
               name={courseNames[id] ?? id}

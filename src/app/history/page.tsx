@@ -26,7 +26,7 @@ type HistoryXpViewId = XpWindow | "total";
 
 /** Time-window pills only (delta / XP gained). */
 const HISTORY_SEGMENT_GROUP =
-  "inline-flex items-center gap-0.5 rounded-lg border border-zinc-800 bg-zinc-950 p-0.5";
+  "inline-flex max-w-full items-center gap-0.5 overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-950 p-0.5";
 
 function historySegmentBtnClass(selected: boolean) {
   return `px-3 py-1.5 rounded-md text-sm whitespace-nowrap transition-colors ${
@@ -176,10 +176,10 @@ export default function HistoryPage() {
     : null;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 sm:space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h2 className="text-xl font-bold">History</h2>
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           <div className={HISTORY_SEGMENT_GROUP}>
             {XP_WINDOW_OPTIONS.map((r) => (
               <button
@@ -231,7 +231,7 @@ export default function HistoryPage() {
           <p className="text-xs text-zinc-500 mb-2">
             Stats · {rangeLabel}
           </p>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-3 gap-1.5 sm:gap-3 md:grid-cols-3 lg:grid-cols-6">
             <StatCard label="Total XP" value={filteredStats.total.toLocaleString()} />
             <StatCard label="Avg Daily" value={filteredStats.avg} sub="XP on active days" />
             <StatCard label="Sessions" value={filteredStats.sessions.toLocaleString()} />
@@ -243,7 +243,7 @@ export default function HistoryPage() {
       )}
 
       {stackData && stackData.length > 0 && (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+        <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900 p-3 sm:p-4">
           {/*
             key={view} forces a full remount on view change. Recharts caches
             its registry of stacked <Area> children internally; if Areas come
@@ -317,9 +317,9 @@ export default function HistoryPage() {
           itself handles the empty-data case. */}
       {xpDaily && (
         <div className="border-t border-zinc-800 pt-6">
-          <div className="flex items-center justify-between mb-3">
+          <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h3 className="text-lg font-semibold">Streak Details · {rangeLabel}</h3>
-            <div className="flex gap-1">
+            <div className="flex gap-1 overflow-x-auto pb-1 sm:overflow-visible sm:pb-0">
               {METRICS.map((m) => (
                 <button
                   key={m.value}
@@ -336,7 +336,7 @@ export default function HistoryPage() {
               ))}
             </div>
           </div>
-          <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+          <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900 p-3 sm:p-4">
             <DailyMetricChart
               data={xpDaily}
               metric={metric}
@@ -354,9 +354,9 @@ export default function HistoryPage() {
         <>
           <section>
             <h3 className="text-lg font-semibold mb-3">Daily Breakdown · {rangeLabel}</h3>
-            <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-              <div className="max-h-96 overflow-y-auto">
-                <table className="w-full text-sm">
+            <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900">
+              <div className="max-h-96 overflow-auto">
+                <table className="w-full min-w-[42rem] text-sm">
                   <thead className="sticky top-0 bg-zinc-900 border-b border-zinc-800">
                     <tr className="text-zinc-500 text-left">
                       <th className="px-4 py-2">Date</th>
@@ -393,7 +393,7 @@ export default function HistoryPage() {
       {xpStats && (
         <section>
           <h3 className="text-lg font-semibold mb-3">All-Time Stats</h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 gap-1.5 sm:gap-3 md:grid-cols-4">
             <StatCard label="Total XP" value={Number(xpStats.total_xp || 0).toLocaleString()} />
             <StatCard label="Best Day" value={Number(xpStats.best_day_xp || 0).toLocaleString()} />
             <StatCard label="Active Days" value={Number(xpStats.total_days || 0)} />

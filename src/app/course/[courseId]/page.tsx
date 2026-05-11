@@ -109,10 +109,10 @@ export default function CourseDetail({ params }: { params: Promise<{ courseId: s
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 sm:space-y-6">
       <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold">{courseFlag} {courseTitle}</h2>
+        <div className="min-w-0">
+          <h2 className="break-words text-xl font-bold">{courseFlag} {courseTitle}</h2>
           {scriptInfo && (
             <p className="text-sm text-zinc-500 mt-1">
               Writing system: {scriptInfo.scripts.map((s) => `${s.name} (${s.type})`).join(", ")}
@@ -139,7 +139,7 @@ export default function CourseDetail({ params }: { params: Promise<{ courseId: s
         </div>
       )}
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-3 gap-1.5 sm:gap-3 md:grid-cols-4">
         <StatCard label="Completed" value={`${completedSkills.length}/${skills?.length ?? 0}`} />
         <StatCard label="In Progress" value={inProgressSkills.length} />
         <StatCard label="Words" value={vocabWords.length} />
@@ -153,9 +153,9 @@ export default function CourseDetail({ params }: { params: Promise<{ courseId: s
 
       {xpHistory.length > 1 && (
         <section>
-          <div className="flex items-center justify-between mb-3">
+          <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h3 className="text-lg font-semibold">XP Over Time</h3>
-            <div className="flex gap-1">
+            <div className="flex gap-1 overflow-x-auto pb-1 sm:overflow-visible sm:pb-0">
               {XP_WINDOW_OPTIONS.map((r) => (
                 <button
                   key={r.value}
@@ -171,13 +171,13 @@ export default function CourseDetail({ params }: { params: Promise<{ courseId: s
               ))}
             </div>
           </div>
-          <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+          <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900 p-3 sm:p-4">
             <XpChart data={xpHistory} dataKey="xp" height={200} domainStart={xpDomainStart} />
           </div>
         </section>
       )}
 
-      <div className="flex gap-1 border-b border-zinc-800">
+      <div className="flex gap-1 overflow-x-auto border-b border-zinc-800">
         {tabs.map((t) => (
           <button
             key={t.id}
@@ -194,7 +194,7 @@ export default function CourseDetail({ params }: { params: Promise<{ courseId: s
       </div>
 
       {tab === "skills" && (
-        <div className="space-y-6">
+        <div className="space-y-5 sm:space-y-6">
           {scriptSkills.length > 0 && (
             <div>
               <h4 className="text-md font-semibold mb-2 text-zinc-300">Script / Character Skills</h4>
@@ -216,10 +216,10 @@ export default function CourseDetail({ params }: { params: Promise<{ courseId: s
 }
 
 function crownStatus(levelsFinished: number): { label: string; classes: string } {
-  if (levelsFinished >= 5) return { label: "Legendary", classes: "bg-yellow-900/50 text-yellow-300" };
-  if (levelsFinished >= 4) return { label: "Completed", classes: "bg-green-900/50 text-green-400" };
-  if (levelsFinished >= 1) return { label: "In Progress", classes: "bg-blue-900/40 text-blue-400" };
-  return { label: "Not started", classes: "bg-zinc-800 text-zinc-500" };
+  if (levelsFinished >= 5) return { label: "Legendary", classes: "border border-yellow-200 bg-yellow-50 text-yellow-800" };
+  if (levelsFinished >= 4) return { label: "Completed", classes: "border border-green-200 bg-green-50 text-green-700" };
+  if (levelsFinished >= 1) return { label: "In Progress", classes: "border border-blue-200 bg-blue-50 text-blue-700" };
+  return { label: "Not started", classes: "border border-zinc-800 bg-zinc-950 text-zinc-500" };
 }
 
 function SkillTable({ skills }: { skills: Array<Record<string, unknown>> }) {
@@ -240,8 +240,8 @@ function SkillTable({ skills }: { skills: Array<Record<string, unknown>> }) {
           </button>
         ))}
       </div>
-      <div className="max-h-[500px] overflow-y-auto">
-        <table className="w-full text-sm">
+      <div className="max-h-[500px] overflow-auto">
+        <table className="w-full min-w-[34rem] text-sm">
           <thead className="sticky top-0 bg-zinc-900 border-b border-zinc-800">
             <tr className="text-zinc-500 text-left">
               <th className="px-4 py-2">Skill</th>
@@ -287,16 +287,16 @@ function VocabTable({ bundles, words }: { bundles: VocabBundle[]; words: VocabWo
           placeholder="Filter words or skills..."
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          className="bg-zinc-800 text-zinc-200 text-sm px-3 py-1.5 rounded border border-zinc-700 focus:border-zinc-500 outline-none w-64"
+          className="bg-zinc-800 text-zinc-200 text-sm px-3 py-1.5 rounded border border-zinc-700 focus:border-zinc-500 outline-none w-full sm:w-64"
         />
-        <div className="flex gap-1">
+        <div className="flex max-w-full gap-1 overflow-x-auto pb-1 sm:overflow-visible sm:pb-0">
           {(["bundles", "words"] as const).map((v) => (
             <button key={v} onClick={() => setView(v)} className={`text-xs px-2 py-1 rounded ${view === v ? "bg-zinc-700 text-zinc-100" : "text-zinc-500 hover:text-zinc-300"}`}>
               {v === "bundles" ? "Bundles" : "All Words"}
             </button>
           ))}
         </div>
-        <div className="flex gap-1">
+        <div className="flex max-w-full gap-1 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0">
           {(["all", "in-progress", "complete-plus", "complete", "untouched"] as const).map((s) => (
             <button key={s} onClick={() => setStatusFilter(s)} className={`text-xs px-2 py-1 rounded ${statusFilter === s ? "bg-zinc-700 text-zinc-100" : "text-zinc-500 hover:text-zinc-300"}`}>
               {s === "all" ? "All" : vocabStatusText(s)}
@@ -325,8 +325,8 @@ function VocabTable({ bundles, words }: { bundles: VocabBundle[]; words: VocabWo
           ))}
         </div>
       ) : (
-        <div className="max-h-[500px] overflow-y-auto">
-          <table className="w-full text-sm">
+        <div className="max-h-[500px] overflow-auto">
+          <table className="w-full min-w-[38rem] text-sm">
             <thead className="sticky top-0 bg-zinc-900 border-b border-zinc-800">
               <tr className="text-zinc-500 text-left">
                 <th className="px-4 py-2">Word</th>
@@ -352,10 +352,10 @@ function VocabTable({ bundles, words }: { bundles: VocabBundle[]; words: VocabWo
 
 function VocabStatusBadge({ status, label }: { status: VocabBundleStatus; label: string }) {
   const classes =
-    status === "complete-plus" ? "bg-yellow-900/50 text-yellow-300" :
-    status === "complete" ? "bg-green-900/50 text-green-400" :
-    status === "in-progress" ? "bg-blue-900/40 text-blue-400" :
-    "bg-zinc-800 text-zinc-500";
+    status === "complete-plus" ? "border border-yellow-200 bg-yellow-50 text-yellow-800" :
+    status === "complete" ? "border border-green-200 bg-green-50 text-green-700" :
+    status === "in-progress" ? "border border-blue-200 bg-blue-50 text-blue-700" :
+    "border border-zinc-800 bg-zinc-950 text-zinc-500";
 
   return <span className={`text-xs px-2 py-0.5 rounded ${classes}`}>{label}</span>;
 }

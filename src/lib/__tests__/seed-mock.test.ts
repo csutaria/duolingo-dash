@@ -117,6 +117,17 @@ describe("mock screenshot seed", () => {
     }
   });
 
+  it("stores course snapshots with the same timestamp shape as the real DB", () => {
+    const rows = db
+      .prepare("SELECT snapshot_time FROM course_snapshots LIMIT 10")
+      .all() as Array<{ snapshot_time: string }>;
+
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.snapshot_time).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    }
+  });
+
   it("preserves the screenshot streak story and pre-tracking gap", () => {
     const today = (
       db.prepare("SELECT MAX(date) AS date FROM xp_daily").get() as { date: string }

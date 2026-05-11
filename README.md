@@ -69,8 +69,8 @@ The Vocabulary page opens on the last course page you visited in the same browse
 - **Every 30 min** — cheap XP check only, no course switching.
 - **If your XP changed** — switches to a 2-min account watch. Any XP or active-course change in that window resets the quiet counter (you're still practicing, or something else is using the account). 10 minutes of quiet plus a short random backoff → one full all-course sync.
 - **Every night at a configurable hour (default 23:00, in your resolved timezone)** — one full all-course sync to catch idle-day changes. The hour is selectable from the polling-status panel and remembered across restarts. The timezone follows the resolver chain: SyncBar **Override** input (in the same panel) → `DUOLINGO_TZ` env → Duolingo profile → host. Nightly uses the same quiet watcher, so if you happen to be earning XP or switching courses around that hour, it waits until the account is quiet.
-- **Manual Refresh** — resyncs the active course only.
-- **Manual Sync All Languages** — resyncs every course immediately (same disruption caveat below).
+- **Manual Refresh** — resyncs the active course only from the polling-status panel.
+- **Manual Sync All Languages** — resyncs every course immediately from the polling-status panel (same disruption caveat below).
 
 ### Heads-up: all-course syncs switch your active Duolingo language
 
@@ -96,7 +96,7 @@ In this mode the process:
 - opens `data/duolingo.db` with `readonly: true` (writes throw at the SQLite layer),
 - skips the `DUOLINGO_JWT` requirement, the polling timers, and the nightly sync,
 - returns `503 { "error": "read-only" }` from `POST /api/sync`, `POST /api/sync-course`, and `POST /api/polling`,
-- displays a **Read-only** badge in the header and hides the Refresh / Sync All buttons.
+- displays a **Read-only** badge in the header and hides the Refresh / Sync All buttons from the status panel.
 
 Charts and history pages render exactly as on the writer instance. The DB file should be on shared storage or copied from the writer; SQLite WAL is concurrent-read-safe with one writer.
 

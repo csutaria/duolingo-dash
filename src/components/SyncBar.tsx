@@ -55,7 +55,7 @@ function SyncProgressBar({
 }
 
 const panelBase =
-  "absolute top-full right-0 z-[200] mt-2 w-max max-w-[min(22rem,calc(100vw-1.5rem))] max-h-[min(70vh,calc(100vh-6rem))] overflow-y-auto rounded-md border border-zinc-600 bg-zinc-900 px-3 py-2.5 text-left text-xs text-zinc-300 shadow-xl transition-opacity duration-150";
+  "absolute top-full left-0 z-[200] mt-2 w-[calc(100vw-2rem)] max-w-[22rem] max-h-[min(70vh,calc(100vh-6rem))] overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-left text-xs text-zinc-300 shadow-xl transition-opacity duration-150 sm:left-auto sm:right-0 sm:w-max sm:max-w-[min(22rem,calc(100vw-1.5rem))]";
 
 const panelShown = "pointer-events-auto visible opacity-100";
 const panelHidden = "pointer-events-none invisible opacity-0";
@@ -188,6 +188,9 @@ function SyncStatusPanel({
   pauseBusy,
   currentSync,
   expectedMsForCurrent,
+  onRefresh,
+  onSyncAll,
+  syncBusy,
 }: {
   lastSync: string | null;
   syncError: string | null;
@@ -216,6 +219,9 @@ function SyncStatusPanel({
   pauseBusy: boolean;
   currentSync: CurrentSync | null;
   expectedMsForCurrent: number | null;
+  onRefresh: () => void;
+  onSyncAll: () => void;
+  syncBusy: boolean;
 }) {
   const watchingAccount = syncMode === "fast" || syncMode === "course_conflict";
   const idleText =
@@ -224,7 +230,7 @@ function SyncStatusPanel({
       : "Idle — XP check every 30m";
 
   const stateLabel = readOnly
-    ? { text: "Read-only — display instance", color: "text-blue-300" }
+    ? { text: "Read-only — display instance", color: "text-blue-600" }
     : !authenticated
       ? { text: "Not connected", color: "text-red-400" }
       : paused && currentlyRunning
@@ -370,14 +376,32 @@ function SyncStatusPanel({
         </div>
       ) : (
         authenticated && (
-          <div className="mt-2.5 border-t border-zinc-800 pt-2">
+          <div className="mt-2.5 space-y-2 border-t border-zinc-800 pt-2">
+            <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={onRefresh}
+                disabled={syncBusy}
+                className="whitespace-nowrap rounded bg-green-600 px-2 py-1 text-[11px] font-medium text-white transition-colors hover:bg-green-500 disabled:opacity-50"
+              >
+                {syncBusy ? "Syncing..." : "Refresh"}
+              </button>
+              <button
+                type="button"
+                onClick={onSyncAll}
+                disabled={syncBusy}
+                className="whitespace-nowrap rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-800 disabled:opacity-50"
+              >
+                {syncBusy ? "Syncing..." : "Sync all languages"}
+              </button>
+            </div>
             <button
               type="button"
               onClick={onTogglePaused}
               disabled={pauseBusy}
               className={`w-full whitespace-nowrap rounded px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50 ${
                 paused
-                  ? "bg-green-700/60 text-green-100 hover:bg-green-600/70"
+                  ? "bg-green-600 text-white hover:bg-green-500"
                   : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
               }`}
             >
@@ -433,18 +457,12 @@ export function SyncBar() {
     };
   }, [pinned]);
 
-  // Clear the post-unpin suppression flag once the user has fully disengaged.
-  useEffect(() => {
-    if (!hover && !focused && suppressed) setSuppressed(false);
-  }, [hover, focused, suppressed]);
-
   const serverPaused = status?.paused === true;
-  useEffect(() => {
-    if (optimisticPaused == null) return;
-    if (serverPaused === optimisticPaused) setOptimisticPaused(null);
-  }, [serverPaused, optimisticPaused]);
 
-  const paused = optimisticPaused ?? serverPaused;
+  const paused =
+    optimisticPaused != null && optimisticPaused !== serverPaused
+      ? optimisticPaused
+      : serverPaused;
 
   const handleTogglePaused = useCallback(async () => {
     const next = !paused;
@@ -485,11 +503,10 @@ export function SyncBar() {
   // confirms (poll loop refreshes status every 5s, plus the post-update
   // refetch below).
   const [optimisticNightlyHour, setOptimisticNightlyHour] = useState<number | null>(null);
-  useEffect(() => {
-    if (optimisticNightlyHour == null) return;
-    if (serverNightlyHour === optimisticNightlyHour) setOptimisticNightlyHour(null);
-  }, [serverNightlyHour, optimisticNightlyHour]);
-  const nightlyHour = optimisticNightlyHour ?? serverNightlyHour;
+  const nightlyHour =
+    optimisticNightlyHour != null && optimisticNightlyHour !== serverNightlyHour
+      ? optimisticNightlyHour
+      : serverNightlyHour;
 
   const handleChangeNightlyHour = useCallback(
     async (h: number) => {
@@ -549,7 +566,7 @@ export function SyncBar() {
     : null;
 
   const indicatorColor = readOnly
-    ? "text-blue-300"
+    ? "text-blue-600"
     : !status || !authenticated
       ? "text-red-500"
       : currentlyRunning
@@ -585,6 +602,8 @@ export function SyncBar() {
 
   const panelVisible = pinned || ((hover || focused) && !suppressed);
 
+  const syncBusy = currentlyRunning || syncing;
+
   const handleIndicatorClick = useCallback(() => {
     setPinned((p) => {
       const next = !p;
@@ -615,9 +634,15 @@ export function SyncBar() {
         ref={wrapperRef}
         className="relative shrink-0"
         onMouseEnter={() => setHover(true)}
-        onMouseLeave={() => setHover(false)}
+        onMouseLeave={() => {
+          setHover(false);
+          if (!focused && suppressed) setSuppressed(false);
+        }}
         onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
+        onBlur={() => {
+          setFocused(false);
+          if (!hover && suppressed) setSuppressed(false);
+        }}
       >
         <button
           ref={buttonRef}
@@ -657,44 +682,28 @@ export function SyncBar() {
           pauseBusy={pauseBusy}
           currentSync={currentSync}
           expectedMsForCurrent={expectedMsForCurrent}
+          onRefresh={() => sync(true, false)}
+          onSyncAll={() => {
+            if (
+              confirm(
+                "This will temporarily switch your active Duolingo language to sync all courses. Only use when you're not actively using Duolingo.",
+              )
+            ) {
+              sync(true, true);
+            }
+          }}
+          syncBusy={syncBusy}
         />
       </div>
 
       {readOnly ? (
         <span
-          className="whitespace-nowrap rounded border border-blue-500/40 bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-200"
+          className="whitespace-nowrap rounded border border-blue-500/40 bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-700"
           title="Display-only instance. Writes are disabled."
         >
           Read-only
         </span>
-      ) : (
-        <div className="flex shrink-0 flex-nowrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => sync(true, false)}
-            disabled={syncing}
-            className="whitespace-nowrap px-3 py-1 rounded bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 text-zinc-200 transition-colors"
-          >
-            {syncing ? "Syncing…" : "Refresh"}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (
-                confirm(
-                  "This will temporarily switch your active Duolingo language to sync all courses. Only use when you're not actively using Duolingo.",
-                )
-              ) {
-                sync(true, true);
-              }
-            }}
-            disabled={syncing}
-            className="whitespace-nowrap px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-400 hover:text-zinc-200 transition-colors"
-          >
-            {syncing ? "Syncing…" : "Sync All Languages"}
-          </button>
-        </div>
-      )}
+      ) : null}
     </div>
   );
 }

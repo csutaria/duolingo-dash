@@ -174,23 +174,24 @@ describe("getCourseXpHistory (_pretrack / ideal anchor)", () => {
     const rows = mod.getCourseXpHistory(3);
     expect(rows).toHaveLength(3);
 
-    // _prior = max(idealAtD0, baselineSum) = max(700, 300) = 700
-    // It stays constant across every row (stack offset).
+    // _prior is the course snapshot baseline for bounded delta windows.
+    // Account-wide XP that is outside tracked course deltas is carried by
+    // _pretrack, which can shrink if course snapshots catch up.
     for (const row of rows) {
-      expect(Number(row._prior)).toBe(700);
+      expect(Number(row._prior)).toBe(300);
     }
 
     // D0 (d1): C1 still at baseline (300) → delta 0. idealAt = 800, total = 800.
     // _pretrack absorbs the xp_daily gain not yet visible in course deltas.
     expect(Number(rows[0].C1)).toBe(0);
     expect(Number(rows[0]._total)).toBe(800);
-    expect(Number(rows[0]._pretrack)).toBe(100);
+    expect(Number(rows[0]._pretrack)).toBe(500);
     // D1 (d2): still 300, idealAt = 900, total = 900.
     expect(Number(rows[1].C1)).toBe(0);
-    expect(Number(rows[1]._pretrack)).toBe(200);
+    expect(Number(rows[1]._pretrack)).toBe(600);
     // Today: C1 jumps to 400 → delta 100. idealAt = 1000, total = 1000.
     expect(Number(rows[2].C1)).toBe(100);
-    expect(Number(rows[2]._pretrack)).toBe(200);
+    expect(Number(rows[2]._pretrack)).toBe(600);
     expect(Number(rows[2]._total)).toBe(1000);
 
     // Stack invariant: _prior + _pretrack + Σ course_deltas = _total
@@ -222,14 +223,42 @@ describe("getCourseXpHistory (_pretrack / ideal anchor)", () => {
     const rows = mod.getCourseXpHistory(3);
     expect(rows).toHaveLength(3);
 
-    // _prior stays at anchor (700) since no pre-window course baseline exists.
+    // _prior stays at the course baseline (0) since no pre-window course
+    // snapshot exists.
     for (const row of rows) {
-      expect(Number(row._prior)).toBe(700);
+      expect(Number(row._prior)).toBe(0);
     }
     // Today: C1 delta = 0 (retroactive baseline), _pretrack absorbs the gap.
     expect(Number(rows[2].C1)).toBe(0);
     expect(Number(rows[2]._total)).toBe(1000);
-    expect(Number(rows[2]._pretrack)).toBe(300);
+    expect(Number(rows[2]._pretrack)).toBe(1000);
+  });
+
+  it("bounded windows: course deltas cannot stack above the total line", () => {
+    const today = todayStr();
+    const d1 = addDays(today, -2);
+    const d2 = addDays(today, -1);
+    const preStart = addDays(today, -5);
+
+    db.prepare("INSERT INTO user_profile (id, total_xp) VALUES (1, 1000)").run();
+    db.prepare(
+      "INSERT INTO xp_daily (date, gained_xp) VALUES (?, 100), (?, 100), (?, 100)",
+    ).run(d1, d2, today);
+    db.prepare(
+      `INSERT INTO course_snapshots (snapshot_time, course_id, learning_language, from_language, title, xp, crowns, streak)
+       VALUES (?, 'C1', 'es', 'en', 'Spanish', 300, 0, 0),
+              (?, 'C1', 'es', 'en', 'Spanish', 700, 0, 0)`,
+    ).run(`${preStart}T12:00:00`, `${today}T12:00:00`);
+
+    const rows = mod.getCourseXpHistory(3);
+    const last = rows[2];
+    expect(Number(last._prior)).toBe(300);
+    expect(Number(last.C1)).toBe(400);
+    expect(Number(last._pretrack)).toBe(300);
+    expect(Number(last._total)).toBe(1000);
+    expect(Number(last._prior) + Number(last._pretrack) + Number(last.C1)).toBe(
+      Number(last._total),
+    );
   });
 
   it("falls back gracefully when profile.total_xp is missing", () => {

@@ -338,7 +338,11 @@ export function getCourseXpHistory(
     0,
   );
   const idealAtD0 = haveIdeal ? anchor + cumXpDailyPreWindow : baselineSum;
-  const prior = useDelta ? Math.max(idealAtD0, baselineSum) : 0;
+  const prior = useDelta
+    ? hasDayCount
+      ? baselineSum
+      : Math.max(idealAtD0, baselineSum)
+    : 0;
 
   // Walk date range, forward-filling each course and advancing
   // cumXpDaily. Walking pure ISO date strings (lexicographic compare,

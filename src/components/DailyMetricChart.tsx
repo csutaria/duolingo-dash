@@ -15,7 +15,7 @@ import {
 
 const FIRE_COLOR = "#ff9600";
 const ICE_COLOR = "#1cb0f6";
-const GRAY_COLOR = "#3f3f46";
+const GRAY_COLOR = "#a1a1aa";
 const EPOCH_START_COLOR = "#3b82f6";
 const EPOCH_END_COLOR = "#ef4444";
 const HALF_DAY = 12 * 60 * 60 * 1000;
@@ -115,13 +115,7 @@ export function DailyMetricChart({
     <div>
       <ResponsiveContainer width="100%" height={height}>
         <ComposedChart data={chartData} margin={{ top: 5, right: 16, left: 0, bottom: 5 }}>
-          <defs>
-            <linearGradient id="metricGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="#a1a1aa" stopOpacity={0.3} />
-              <stop offset="95%" stopColor="#a1a1aa" stopOpacity={0.05} />
-            </linearGradient>
-          </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+          <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" />
           {/* Linear scale on numeric ms: same mapping for ReferenceArea / ReferenceLine / Area (time scale was skewing x vs bands). */}
           <XAxis
             dataKey="_t"
@@ -153,15 +147,16 @@ export function DailyMetricChart({
               return (
                 <div
                   style={{
-                    backgroundColor: "#18181b",
-                    border: "1px solid #27272a",
+                    backgroundColor: "#ffffff",
+                    border: "1px solid #d4d4d8",
                     borderRadius: "6px",
-                    color: "#e4e4e7",
+                    color: "#18181b",
                     fontSize: 11,
                     padding: "6px 10px",
+                    boxShadow: "0 10px 24px rgba(24,24,27,0.12)",
                   }}
                 >
-                  <div style={{ marginBottom: 4, color: "#a1a1aa" }}>{formatDayLong(pt._t)}</div>
+                  <div style={{ marginBottom: 4, color: "#71717a" }}>{formatDayLong(pt._t)}</div>
                   <div>
                     {metric === "time" ? `${v}m` : String(v)}{" "}
                     <span style={{ color: "#71717a" }}>
@@ -187,7 +182,7 @@ export function DailyMetricChart({
                 x1={d._t - HALF_DAY}
                 x2={d._t + HALF_DAY}
                 fill={color}
-                fillOpacity={0.18}
+                fillOpacity={0.24}
                 stroke="none"
               />
             );
@@ -196,9 +191,10 @@ export function DailyMetricChart({
           <Area
             type="linear"
             dataKey="_value"
-            stroke="#a1a1aa"
-            fill="url(#metricGrad)"
-            strokeWidth={1.5}
+            stroke="#71717a"
+            fill="#71717a"
+            fillOpacity={0.18}
+            strokeWidth={2}
             dot={false}
             isAnimationActive={false}
           />

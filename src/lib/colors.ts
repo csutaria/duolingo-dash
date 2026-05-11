@@ -1,5 +1,4 @@
-// Color palette — dark mode. Centralize here when adding light mode.
-// Palette assumes dark backgrounds; revisit assignments when light mode lands.
+// Color palette — tuned for the app's default light surface.
 const COURSE_PALETTE = [
   "#58cc02", "#1cb0f6", "#ff9600", "#ce82ff", "#ff4b4b",
   "#00cd9c", "#ffd900", "#ff86d0", "#64d8cb", "#ffb347",
@@ -7,8 +6,8 @@ const COURSE_PALETTE = [
   "#95e1d3", "#f38181", "#aa96da", "#fcbad3", "#dfe6e9",
 ];
 
-export const CHART_TOTAL_COLOR = "#e4e4e7";  // zinc-200 — measured stack-top line
-export const CHART_CEILING_COLOR = "#52525b"; // zinc-600 — Duolingo-reported ceiling
+export const CHART_TOTAL_COLOR = "#18181b";  // measured stack-top line
+export const CHART_CEILING_COLOR = "#71717a"; // Duolingo-reported ceiling
 
 export interface CourseColorInput {
   course_id: string;

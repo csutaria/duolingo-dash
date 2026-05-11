@@ -55,7 +55,7 @@ export function DailyXpBarChart({
     <div>
       <ResponsiveContainer width="100%" height={height}>
         <BarChart data={data} margin={{ top: 5, right: 16, left: 0, bottom: 5 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
+          <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" vertical={false} />
           <XAxis
             dataKey="date"
             tick={{ fill: "#71717a", fontSize: 11 }}
@@ -69,7 +69,7 @@ export function DailyXpBarChart({
           />
           <Tooltip
             wrapperStyle={{ zIndex: 50 }}
-            cursor={{ fill: "rgba(255,255,255,0.03)" }}
+            cursor={{ fill: "rgba(24,24,27,0.04)" }}
             // Recharts' default tooltip lists every stacked <Bar> regardless
             // of value, so multi-day windows show a long row of "0" entries
             // for inactive courses. Filter to non-zero rows, sort desc, and
@@ -95,15 +95,16 @@ export function DailyXpBarChart({
               return (
                 <div
                   style={{
-                    backgroundColor: "#18181b",
-                    border: "1px solid #27272a",
+                    backgroundColor: "#ffffff",
+                    border: "1px solid #d4d4d8",
                     borderRadius: 6,
-                    color: "#e4e4e7",
+                    color: "#18181b",
                     fontSize: 11,
                     padding: "6px 10px",
+                    boxShadow: "0 10px 24px rgba(24,24,27,0.12)",
                   }}
                 >
-                  <div style={{ marginBottom: 4, color: "#a1a1aa" }}>{dateLabel}</div>
+                  <div style={{ marginBottom: 4, color: "#71717a" }}>{dateLabel}</div>
                   {items.map((it) => (
                     <div
                       key={it.k}
@@ -140,6 +141,8 @@ export function DailyXpBarChart({
               dataKey={id}
               stackId="xp"
               fill={colors[id]}
+              stroke="#ffffff"
+              strokeWidth={1}
               name={courseNames[id] ?? id}
               isAnimationActive={false}
             />
@@ -149,6 +152,8 @@ export function DailyXpBarChart({
               dataKey="_untracked"
               stackId="xp"
               fill="#3f3f46"
+              stroke="#ffffff"
+              strokeWidth={1}
               name="Untracked"
               isAnimationActive={false}
             />

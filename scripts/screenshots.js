@@ -5,7 +5,7 @@
  * Steps:
  *   1. Verify Playwright + chromium are usable.
  *   2. (Re)seed `data/mock.db` from `scripts/seed-mock.js`.
- *   3. Spawn an isolated `next dev` on port 3001 with DEMO_MODE=true and a
+ *   3. Spawn an isolated `next dev` on an available demo port with DEMO_MODE=true and a
  *      separate `.next-demo/` build cache so it cannot interfere with a
  *      concurrently-running real dev server (port 3000, real DB, real
  *      `.next/`).
@@ -51,13 +51,14 @@ function ensurePlaywrightBrowsersPath() {
   process.env.PLAYWRIGHT_BROWSERS_PATH = defaultPlaywrightBrowsersPath();
 }
 
-const PORT = 3001;
+const DEFAULT_PORT = 3001;
 const DEMO_DIST_DIR = ".next-demo";
 const REPO_ROOT = path.resolve(__dirname, "..");
 const SCREENSHOTS_DIR = path.join(REPO_ROOT, "docs", "screenshots");
 const MOCK_DB = path.join(REPO_ROOT, "data", "mock.db");
 const STATUS_TIMEOUT_MS = 90_000;
-const BASE = `http://localhost:${PORT}`;
+let PORT = DEFAULT_PORT;
+let BASE = `http://localhost:${PORT}`;
 
 const PAGES = [
   { name: "overview",      url: "/",                       waitFor: "text=Total XP" },
@@ -73,6 +74,7 @@ async function captureHistoryScreenshots(page) {
 
   log("Capturing history-change, history-total, history-streak (/history)");
   await page.goto(`${BASE}/history`, { waitUntil: "networkidle" });
+  await assertDemoMode(page);
   await page.waitForTimeout(800);
   await page.evaluate(() => {
     try {
@@ -83,6 +85,7 @@ async function captureHistoryScreenshots(page) {
     }
   });
   await page.reload({ waitUntil: "networkidle" });
+  await assertDemoMode(page);
   await page.waitForTimeout(800);
 
   await page.getByRole("button", { name: "30d", exact: true }).click();
@@ -146,6 +149,8 @@ async function main() {
   fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
 
   // ── 3. Spawn the isolated demo dev server ──────────────────────────────
+  PORT = await findAvailablePort(DEFAULT_PORT);
+  BASE = `http://localhost:${PORT}`;
   log(`Starting demo server on :${PORT} (DIST=${DEMO_DIST_DIR})`);
   const demoEnv = {
     ...process.env,
@@ -184,17 +189,22 @@ async function main() {
   try {
     log("Waiting for demo server to be ready...");
     await waitForStatus(`${BASE}/api/status`, STATUS_TIMEOUT_MS, () => exited);
+    await sleep(500);
+    if (exited) {
+      throw new Error("Demo server exited after the status endpoint responded.");
+    }
 
     // ── 5. Capture screenshots ──────────────────────────────────────────
     const browser = await chromium.launch();
     try {
       const page = await browser.newPage();
-      await page.setViewportSize({ width: 1400, height: 860 });
+      await page.setViewportSize({ width: 1600, height: 1200 });
       await page.addStyleTag({ content: "nextjs-portal { display: none !important; }" });
 
       for (const { name, url, waitFor } of PAGES) {
         log(`Capturing ${name} (${url})`);
         await page.goto(`${BASE}${url}`, { waitUntil: "networkidle" });
+        await assertDemoMode(page);
         await page.waitForTimeout(800); // let Recharts settle
         if (waitFor) {
           await page
@@ -243,6 +253,10 @@ async function main() {
   log("Done.");
 }
 
+async function assertDemoMode(page) {
+  await page.getByText("Demo", { exact: true }).first().waitFor({ timeout: 5_000 });
+}
+
 function waitForStatus(url, timeoutMs, isDeadCheck) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
@@ -268,6 +282,26 @@ function waitForStatus(url, timeoutMs, isDeadCheck) {
       req.setTimeout(2_000, () => req.destroy());
     };
     tick();
+  });
+}
+
+function findAvailablePort(start) {
+  return new Promise((resolve, reject) => {
+    const tryPort = (port) => {
+      const server = http.createServer();
+      server.once("error", (err) => {
+        if (err && err.code === "EADDRINUSE") {
+          tryPort(port + 1);
+          return;
+        }
+        reject(err);
+      });
+      server.once("listening", () => {
+        server.close(() => resolve(port));
+      });
+      server.listen(port);
+    };
+    tryPort(start);
   });
 }
 

@@ -27,9 +27,8 @@
 
 ### Light mode UI
 
-- Add light/dark mode toggle (or system preference detection)
-- Currently hard-coded dark (`bg-zinc-950`, `text-zinc-100` throughout)
-- Tailwind's `dark:` variant would allow both without a full redesign
+- Default UI is light via the shared Tailwind zinc palette in `src/app/globals.css`.
+- Follow-up: add an explicit dark-mode toggle or system preference detection if dark mode becomes useful again.
 
 ### Dev/prod split + logging
 

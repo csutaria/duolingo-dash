@@ -173,16 +173,23 @@ function buildSchema(db) {
 const NOW = new Date();
 const isoNow = () => NOW.toISOString();
 
-function daysAgo(n) {
+function shiftedDaysAgo(n) {
   const d = new Date(NOW);
-  d.setDate(d.getDate() - n);
+  d.setTime(d.getTime() - n * 24 * 60 * 60 * 1000);
+  return d;
+}
+
+function daysAgo(n) {
+  const d = shiftedDaysAgo(n);
   return d.toISOString();
 }
 
+function sqliteTimestampAgo(n) {
+  return shiftedDaysAgo(n).toISOString().replace("T", " ").slice(0, 19);
+}
+
 function dateStr(n) {
-  const d = new Date(NOW);
-  d.setDate(d.getDate() - n);
-  return d.toISOString().split("T")[0];
+  return shiftedDaysAgo(n).toISOString().split("T")[0];
 }
 
 function rand(a, b) {
@@ -301,7 +308,7 @@ function populate(db) {
       total_xp, xp_goal, gems, lingots, has_plus, creation_date,
       current_course_id, learning_language, from_language, motivation,
       timezone, updated_at)
-    VALUES (1, 999001, 'alexrivera', 'Alex Rivera', NULL,
+    VALUES (1, 999001, 'testuser', 'Test User', NULL,
       'Language enthusiast. 8 languages and counting.',
       ?, ?, ?, ?, ?, 50, 1240, 340, 1,
       1519776000, 'DUOLINGO_ES_EN', 'es', 'en', 'I want to travel more',
@@ -322,7 +329,7 @@ function populate(db) {
   `);
   const insertSnaps = db.transaction(() => {
     for (const offset of SNAPSHOT_OFFSETS) {
-      const ts = daysAgo(offset);
+      const ts = sqliteTimestampAgo(offset);
       for (const c of COURSES) {
         const xp = xpAtOffset(c, offset);
         if (offset > 0 && xp === 0) continue; // skip historical zeros to keep the chart clean
