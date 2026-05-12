@@ -127,7 +127,7 @@ function VocabContent({ courseId }: { courseId: string }) {
         <MetricCard label="Unique Words" value={wordRows.length} />
         <MetricCard label="Skill Words" value={totalSkillWords} />
         <MetricCard label="In Progress" value={inProgress.length} />
-        <MetricCard label="Complete" value={complete.length} />
+        <MetricCard label="Completed" value={complete.length} />
       </div>
 
       <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
@@ -193,9 +193,9 @@ function StudyQueue({ bundles }: { bundles: VocabBundle[] }) {
   return (
     <div className="space-y-6">
       <BundleSection title="In Progress" bundles={sortBundlesByStatus(byStatus["in-progress"])} empty="No in-progress skill bundles." />
-      <BundleSection title="Complete+" bundles={sortBundlesByCourseOrder(byStatus["complete-plus"])} empty="No Complete+ bundles yet." />
-      <BundleSection title="Complete" bundles={sortBundlesByCourseOrder(byStatus.complete)} empty="No complete bundles yet." />
-      <BundleSection title="Untouched" bundles={sortBundlesByCourseOrder(byStatus.untouched)} empty="No untouched bundles." compact />
+      <BundleSection title="Legendary" bundles={sortBundlesByCourseOrder(byStatus["complete-plus"])} empty="No legendary bundles yet." />
+      <BundleSection title="Completed" bundles={sortBundlesByCourseOrder(byStatus.complete)} empty="No completed bundles yet." />
+      <BundleSection title="Not started" bundles={sortBundlesByCourseOrder(byStatus.untouched)} empty="No not started bundles." compact />
     </div>
   );
 }
@@ -320,10 +320,10 @@ function filterWordRows(rows: VocabWordRow[], filter: string, status: StatusFilt
 }
 
 function statusText(status: VocabBundleStatus): string {
-  if (status === "complete-plus") return "Complete+";
-  if (status === "complete") return "Complete";
+  if (status === "complete-plus") return "Legendary";
+  if (status === "complete") return "Completed";
   if (status === "in-progress") return "In Progress";
-  return "Untouched";
+  return "Not started";
 }
 
 function viewLabel(view: VocabView): string {

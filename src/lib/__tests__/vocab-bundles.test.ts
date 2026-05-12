@@ -8,10 +8,10 @@ import {
 
 describe("vocab bundle helpers", () => {
   it("classifies levels_finished into study statuses", () => {
-    expect(vocabBundleStatus(0)).toEqual({ status: "untouched", label: "Untouched" });
-    expect(vocabBundleStatus(2)).toEqual({ status: "in-progress", label: "In progress" });
-    expect(vocabBundleStatus(4)).toEqual({ status: "complete", label: "Complete" });
-    expect(vocabBundleStatus(5)).toEqual({ status: "complete-plus", label: "Complete+" });
+    expect(vocabBundleStatus(0)).toEqual({ status: "untouched", label: "Not started" });
+    expect(vocabBundleStatus(2)).toEqual({ status: "in-progress", label: "In Progress" });
+    expect(vocabBundleStatus(4)).toEqual({ status: "complete", label: "Completed" });
+    expect(vocabBundleStatus(5)).toEqual({ status: "complete-plus", label: "Legendary" });
   });
 
   it("parses skill words defensively", () => {
@@ -38,7 +38,7 @@ describe("vocab bundle helpers", () => {
         skillName: "Cafe",
         levelsFinished: 5,
         status: "complete-plus",
-        statusLabel: "Complete+",
+        statusLabel: "Legendary",
         words: ["차", "커피"],
         wordCount: 2,
         coordsX: 1,
@@ -72,7 +72,7 @@ describe("vocab bundle helpers", () => {
 
     const coffee = rows.find((row) => row.word === "커피");
     expect(coffee?.skills.map((skill) => skill.skillName)).toEqual(["Cafe", "Restaurant"]);
-    expect(coffee?.strongestStatusLabel).toBe("Complete+");
+    expect(coffee?.strongestStatusLabel).toBe("Legendary");
   });
 
   it("sorts bundles by course coordinates", () => {

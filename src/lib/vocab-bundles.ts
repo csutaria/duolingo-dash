@@ -31,10 +31,10 @@ export function vocabBundleStatus(levelsFinished: number): {
   status: VocabBundleStatus;
   label: string;
 } {
-  if (levelsFinished >= 5) return { status: "complete-plus", label: "Complete+" };
-  if (levelsFinished >= 4) return { status: "complete", label: "Complete" };
-  if (levelsFinished >= 1) return { status: "in-progress", label: "In progress" };
-  return { status: "untouched", label: "Untouched" };
+  if (levelsFinished >= 5) return { status: "complete-plus", label: "Legendary" };
+  if (levelsFinished >= 4) return { status: "complete", label: "Completed" };
+  if (levelsFinished >= 1) return { status: "in-progress", label: "In Progress" };
+  return { status: "untouched", label: "Not started" };
 }
 
 export function parseSkillWords(value: unknown): string[] {

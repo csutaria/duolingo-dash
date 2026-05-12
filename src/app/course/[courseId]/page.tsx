@@ -387,8 +387,8 @@ function filterWords(
 }
 
 function vocabStatusText(status: VocabBundleStatus): string {
-  if (status === "complete-plus") return "Complete+";
-  if (status === "complete") return "Complete";
+  if (status === "complete-plus") return "Legendary";
+  if (status === "complete") return "Completed";
   if (status === "in-progress") return "In Progress";
-  return "Untouched";
+  return "Not started";
 }
