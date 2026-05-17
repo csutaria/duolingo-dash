@@ -9,7 +9,7 @@ import {
   type SyncStateSnapshot,
 } from "../polling";
 import { __resetPollingStateForTests } from "../polling-state";
-import { ACTIVE_COURSE_CONFLICT_ERROR } from "../sync-conflict";
+import { ACTIVE_COURSE_CONFLICT_ERROR, XP_CONFLICT_ERROR } from "../sync-conflict";
 
 describe("shouldKickoffPoll (regression guard for commit 84935f3)", () => {
   it("allows kickoff when nothing is running and no sync is in flight", () => {
@@ -322,6 +322,39 @@ describe("automatic account-quiet cycle behavior", () => {
     expect(fullSync).toHaveBeenCalledWith(client, true);
     expect(state.mode).toBe("course_conflict");
     expect(state.automaticCycleReason).toBe("active_course_conflict");
+    expect(state.fastConsecutiveIdleTicks).toBe(0);
+    expect(state.accountQuietJitterTimer).toBeNull();
+  });
+
+  it("returns to account-quiet monitoring when an automatic cycle detects XP drift", async () => {
+    jest.spyOn(Math, "random").mockReturnValue(0);
+    const fullSync = jest.fn().mockResolvedValue({
+      type: "skipped",
+      changed: false,
+      totalXp: 100,
+      error: XP_CONFLICT_ERROR,
+      timestamp: new Date().toISOString(),
+    });
+    jest.doMock("../sync", () => ({
+      quickCheck: jest.fn().mockResolvedValue({ changed: false, currentXp: 100 }),
+      fullSync,
+    }));
+
+    const polling = require("../polling") as typeof import("../polling");
+    const { getPollingState } = require("../polling-state") as typeof import("../polling-state");
+    const state = getPollingState();
+    const client = clientForAccountQuiet();
+    state.mode = "fast";
+    state.automaticCycleReason = "xp_changed";
+
+    for (let i = 0; i < polling.FAST_IDLE_TRIGGER_TICKS; i++) {
+      await polling.__runFastTickForTests(client);
+    }
+    await jest.advanceTimersByTimeAsync(ACCOUNT_QUIET_JITTER_MIN_MS);
+
+    expect(fullSync).toHaveBeenCalledWith(client, true);
+    expect(state.mode).toBe("fast");
+    expect(state.automaticCycleReason).toBe("account_conflict");
     expect(state.fastConsecutiveIdleTicks).toBe(0);
     expect(state.accountQuietJitterTimer).toBeNull();
   });

@@ -72,7 +72,7 @@ The dashboard's goal is simple: stay current without interrupting you while you 
 
 ### Heads-up: all-course syncs switch your active Duolingo language
 
-Reading skill and vocab data requires Duolingo's API to have that course active on your account. During a full all-course sync, Dash temporarily switches your active course one-at-a-time and switches back when done. This is visible in the real Duolingo app — if you start a lesson mid-sync you might land in the wrong language. The quiet window before Dash fires one is specifically designed to avoid this. If the active course changes unexpectedly during an automatic all-course sync, Dash aborts the cycle, skips drift-tainted course-detail writes, and waits for a quiet window before retrying.
+Reading skill and vocab data requires Duolingo's API to have that course active on your account. During a full all-course sync, Dash temporarily switches your active course one-at-a-time and switches back when done. This is visible in the real Duolingo app — if you start a lesson mid-sync you might land in the wrong language. The quiet window before Dash fires one is specifically designed to avoid this. If the active course or account XP changes unexpectedly during an automatic all-course sync, Dash aborts the cycle, skips drift-tainted course-detail writes, and waits for a quiet window before retrying.
 
 ### Pause + progress bar
 

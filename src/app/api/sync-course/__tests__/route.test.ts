@@ -162,4 +162,30 @@ describe("POST /api/sync-course", () => {
     });
     expect(mocks.syncCourseDetails).toHaveBeenCalledTimes(1);
   });
+
+  it("returns XP conflict results without claiming switchedBack", async () => {
+    delete process.env.DUOLINGO_READ_ONLY;
+    const mocks = setupMocks();
+    mocks.syncCourseDetails.mockResolvedValueOnce({
+      success: false,
+      switchedBack: false,
+      error: "XP changed outside this sync",
+      details: ["XP changed outside this sync after switching to B: expected 100, saw 101"],
+    });
+    const { POST } = loadRoute();
+
+    const res = await POST(
+      postRequest({ courseId: "B", learningLanguage: "es", fromLanguage: "en" }),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({
+      success: false,
+      switchedBack: false,
+      error: "XP changed outside this sync",
+      details: ["XP changed outside this sync after switching to B: expected 100, saw 101"],
+    });
+    expect(mocks.syncCourseDetails).toHaveBeenCalledTimes(1);
+  });
 });

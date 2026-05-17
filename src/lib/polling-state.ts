@@ -5,6 +5,7 @@ export type AutomaticCycleReason =
   | "xp_changed"
   | "nightly"
   | "active_course_conflict"
+  | "account_conflict"
   | "gate_busy"
   | "retry_error";
 

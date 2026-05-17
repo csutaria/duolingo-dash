@@ -322,6 +322,85 @@ describe("syncAllCourseDetails course-selector ordering", () => {
     expect(dbMocks.prepareRun).not.toHaveBeenCalled();
   });
 
+  it("does not save course-dependent details for a course when XP drifts mid-fetch", async () => {
+    const user = makeUser([{ id: "A", xp: 100 }], "A");
+    let totalXp = 0;
+    const client = {
+      ...makeClient(user),
+      getUser: jest.fn(() => Promise.resolve({
+        ...makeUser([{ id: "A", xp: 100 }], "A"),
+        totalXp,
+      })),
+      getVocabulary: jest.fn(async () => {
+        totalXp = 1;
+        return {
+          vocab_overview: [
+            {
+              word_string: "hola",
+              lexeme_id: "lex-1",
+              strength_bars: 4,
+              skill: "greetings",
+              pos: "noun",
+              gender: "",
+              last_practiced: "2026-01-01",
+            },
+          ],
+        };
+      }),
+    } as unknown as DuolingoClient;
+
+    const result = await mod.fullSync(client, false);
+
+    expect(result).toMatchObject({
+      type: "skipped",
+      changed: false,
+      error: "XP changed outside this sync",
+    });
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("XP changed outside this sync after A vocabulary fetch"),
+      ]),
+    );
+    expect(dbMocks.snapshotVocab).not.toHaveBeenCalled();
+    expect(dbMocks.snapshotSkills).not.toHaveBeenCalled();
+    expect(dbMocks.prepareRun).not.toHaveBeenCalled();
+  });
+
+  it("reports both signals when XP and active course drift in the same guard check", async () => {
+    const user = makeUser([{ id: "A", xp: 100 }], "A");
+    let activeId = "A";
+    let totalXp = 0;
+    const client = {
+      ...makeClient(user),
+      getUser: jest.fn(() => Promise.resolve({
+        ...makeUser([{ id: "A", xp: 100 }], activeId),
+        totalXp,
+      })),
+      getVocabulary: jest.fn(async () => {
+        activeId = "B";
+        totalXp = 1;
+        return { vocab_overview: [] };
+      }),
+    } as unknown as DuolingoClient;
+
+    const result = await mod.fullSync(client, false);
+
+    expect(result).toMatchObject({
+      type: "skipped",
+      changed: false,
+      error: "Active course changed outside this sync",
+    });
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("XP changed outside this sync after A vocabulary fetch"),
+        expect.stringContaining("Active course changed outside this sync after A vocabulary fetch"),
+      ]),
+    );
+    expect(dbMocks.snapshotVocab).not.toHaveBeenCalled();
+    expect(dbMocks.snapshotSkills).not.toHaveBeenCalled();
+    expect(dbMocks.prepareRun).not.toHaveBeenCalled();
+  });
+
   it("saves clean detail data when one endpoint fails without active-course drift", async () => {
     const user = makeUser([{ id: "A", xp: 100 }], "A");
     const client = {
@@ -465,6 +544,41 @@ describe("syncAllCourseDetails course-selector ordering", () => {
     });
     expect(result.details).toEqual(
       expect.arrayContaining([expect.stringContaining("expected B, saw C")]),
+    );
+    expect(switchCalls).toEqual(["B"]);
+  });
+
+  it("manual per-course sync aborts on XP drift without restoring over another actor", async () => {
+    const courses = [
+      { id: "A", xp: 100 },
+      { id: "B", xp: 200 },
+    ];
+    let activeId = "A";
+    let totalXp = 0;
+    const user = () => ({
+      ...makeUser(courses, activeId),
+      totalXp,
+    });
+    const client = {
+      ...makeClient(user()),
+      getUser: jest.fn(() => Promise.resolve(user())),
+      switchCourse: jest.fn((id: string) => {
+        switchCalls.push(id);
+        activeId = id;
+        totalXp = 1;
+        return Promise.resolve();
+      }),
+    } as unknown as DuolingoClient;
+
+    const result = await mod.syncCourseDetails(client, "B", "ll-B", "fl-B");
+
+    expect(result).toMatchObject({
+      success: false,
+      switchedBack: false,
+      error: "XP changed outside this sync",
+    });
+    expect(result.details).toEqual(
+      expect.arrayContaining([expect.stringContaining("expected 0, saw 1")]),
     );
     expect(switchCalls).toEqual(["B"]);
   });

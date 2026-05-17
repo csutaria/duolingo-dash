@@ -202,6 +202,31 @@ describe("POST /api/sync", () => {
       expect(mocks.notifyAllCourseSyncComplete).not.toHaveBeenCalled();
     });
 
+    it("returns XP conflict results from forced sync without completion notification", async () => {
+      const mocks = setupMocks();
+      mocks.fullSync.mockResolvedValueOnce({
+        type: "skipped",
+        changed: false,
+        totalXp: 100,
+        error: "XP changed outside this sync",
+        warnings: ["XP changed outside this sync after B vocabulary fetch: expected 100, saw 101"],
+        timestamp: "2026-01-01T00:00:00.000Z",
+      });
+      const { POST } = loadRoute();
+
+      const res = await POST(postRequest({ force: true, cycleAll: true }));
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body).toMatchObject({
+        type: "skipped",
+        changed: false,
+        error: "XP changed outside this sync",
+      });
+      expect(mocks.fullSync).toHaveBeenCalledWith(expect.anything(), true);
+      expect(mocks.notifyAllCourseSyncComplete).not.toHaveBeenCalled();
+    });
+
     it("does not send a completion notification when manualRefresh skips", async () => {
       const mocks = setupMocks();
       mocks.manualRefresh.mockResolvedValueOnce({

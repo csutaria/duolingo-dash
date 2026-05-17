@@ -213,6 +213,7 @@ State transitions (pure, unit-tested as `advanceSyncState`):
   fast ─────(XP/course unchanged)─────▶ fast (idle++)
   fast ─────(5th unchanged tick)──────▶ jitter 30–120s + precheck + cycle
   cycle ────(active-course conflict)──▶ course_conflict (same detector)
+  cycle ────(XP conflict)─────────────▶ fast (same detector)
   retry ────(gate busy / precheck changed)─▶ fast (same detector)
   any  ─────(external_fullsync_done)──▶ baseline
 ```
@@ -233,13 +234,13 @@ Guards:
   closed with a skipped/error response instead of risking overlapping
   course switches.
 - Automatic cycle-all has a single account-quiet readiness gate. Baseline XP
-  changes, nightly triggers, previous active-course conflicts, gate contention,
-  and retry errors all re-enter the same detector: account XP and active course
-  must both stay stable for 5 observations. After quiet is satisfied, Dash waits
-  a random 30-120 s jitter and performs one final account observation before
-  acquiring the sync gate. Gate-busy, final-precheck changes, or another drift
-  send it back to monitoring. Manual sync routes return conflicts immediately
-  and do not schedule retry.
+  changes, nightly triggers, previous active-course or XP conflicts, gate
+  contention, and retry errors all re-enter the same detector: account XP and
+  active course must both stay stable for 5 observations. After quiet is
+  satisfied, Dash waits a random 30-120 s jitter and performs one final account
+  observation before acquiring the sync gate. Gate-busy, final-precheck changes,
+  or another drift send it back to monitoring. Manual sync routes return
+  conflicts immediately and do not schedule retry.
 - `startPolling` is idempotent: `if (state.baselineTimer) return;` — re-entrant calls (HMR, multiple `ensureClient`s) are no-ops.
 - Kickoff `baselineTick` runs once on start, but **only if** `isRunning === false` **and** `getCurrentSync() == null` (regression guard, commit 84935f3).
 - `manualRefresh` keeps its 30 s cooldown and respects `isRunning`.
@@ -276,18 +277,19 @@ Logging:
 5. Course detail:
   - `cycleAllCourses = false` → `saveLanguageDetails` for the active course only (endpoints ⑤, ⑦).
   - `cycleAllCourses = true` → `syncAllCourseDetails` cycles through every course via endpoint ⑥ (`PATCH /users/{id}`) — **this is account-wide and visible in the real Duolingo app**. Each PATCH moves its target to the top of the account's course-selector (a recency stack), and the API-returned `user.courses` array mirrors that order. The cycle visits non-active courses in **reverse of `user.courses`** and restores the active course last — the identity permutation, so the selector ends the cycle in the exact order the user started with.
-  - During course-cycling syncs, Dash records the expected active course,
-    treats its own switches as expected active-course changes, and re-reads
-    endpoint ① before/after every switch and every active-course-dependent
-    fetch. Unexpected drift throws `ActiveCourseConflictError`, stops the sync,
-    and prevents further switches. Dash does **not** restore over another
-    actor's active course after drift.
+  - During course-cycling syncs, Dash records the expected active course and
+    starting total XP, treats its own switches as expected active-course
+    changes, and re-reads endpoint ① before/after every switch and every
+    active-course-dependent fetch. Unexpected active-course drift throws
+    `ActiveCourseConflictError`; unexpected XP drift throws `XpConflictError`.
+    Either conflict stops the sync and prevents further switches. Dash does
+    **not** restore over another actor's active course after drift.
   - Course-dependent detail writes are drift-atomic per course. Vocab, skills
     / path-derived details, and mistake count are collected into an in-memory
-    draft and written only after all active-course guard checks for that course
-    have passed. Ordinary endpoint failures are not atomicity failures: if
-    vocab fails while the active course stays correct, clean skill and mistake
-    data may still be written.
+    draft and written only after all account guard checks for that course have
+    passed. Ordinary endpoint failures are not atomicity failures: if vocab
+    fails while active course and XP stay correct, clean skill and mistake data
+    may still be written.
 6. `logSync({ syncType: "full", totalXp, success, durationMs, cycleAll })`.
 7. `clearCurrentSync()` in a `finally` — always clears, even on throw.
 
