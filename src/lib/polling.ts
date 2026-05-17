@@ -5,7 +5,10 @@ import { getPollingState, type AutomaticCycleReason } from "./polling-state";
 import { epochMsForLocalTime, getLocalParts } from "./tz";
 import { getAppSettings } from "./app-settings";
 import { SYNC_ALREADY_RUNNING, tryAcquireAccountSyncGate } from "./sync-lock";
-import { isActiveCourseConflictResult } from "./sync-conflict";
+import {
+  ACTIVE_COURSE_CONFLICT_ERROR,
+  isAccountConflictResult,
+} from "./sync-conflict";
 import { logger } from "./logger";
 
 /**
@@ -363,8 +366,13 @@ async function retryAutomaticCycle(client: DuolingoClient): Promise<void> {
   }
   try {
     state.lastSyncResult = await fullSync(client, true);
-    if (isActiveCourseConflictResult(state.lastSyncResult)) {
-      enterAccountQuietMode(client, "active_course_conflict");
+    if (isAccountConflictResult(state.lastSyncResult)) {
+      enterAccountQuietMode(
+        client,
+        state.lastSyncResult.error === ACTIVE_COURSE_CONFLICT_ERROR
+          ? "active_course_conflict"
+          : "account_conflict",
+      );
       return;
     }
     if (state.automaticCycleReason === "nightly") {

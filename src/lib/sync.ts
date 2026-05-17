@@ -21,9 +21,9 @@ import { DuolingoUser, LegacySkill, XpSummary } from "./types";
 import { formatLocalDate, getResolvedTimezone } from "./tz";
 import { tryAcquireAccountSyncGate } from "./sync-lock";
 import {
-  ACTIVE_COURSE_CONFLICT_ERROR,
   ActiveCourseConflictError,
-  isActiveCourseConflictError,
+  XpConflictError,
+  isAccountConflictError,
 } from "./sync-conflict";
 import { logger } from "./logger";
 
@@ -80,7 +80,7 @@ export async function fullSync(client: DuolingoClient, cycleAllCourses = false):
     if (cycleAllCourses) {
       warnings = await syncAllCourseDetails(client, user);
     } else {
-      const guard = createActiveCourseGuard(client, user.currentCourseId);
+      const guard = createActiveCourseGuard(client, user.currentCourseId, user.totalXp);
       await saveLanguageDetails(client, user.currentCourseId, user.learningLanguage, guard);
     }
 
@@ -94,24 +94,25 @@ export async function fullSync(client: DuolingoClient, cycleAllCourses = false):
     logger.info("sync complete", { cycleAll: cycleAllCourses, totalXp });
     return { type: "full", changed: true, totalXp, warnings: warnings.length ? warnings : undefined, timestamp: now };
   } catch (err) {
-    if (isActiveCourseConflictError(err)) {
+    if (isAccountConflictError(err)) {
       logSync({
         syncType: "full",
         totalXp,
         success: false,
-        errorMessage: ACTIVE_COURSE_CONFLICT_ERROR,
+        errorMessage: err.message,
         durationMs: Date.now() - startedAtMs,
         cycleAll: cycleAllCourses,
       });
-      logger.warn("sync aborted: active course conflict", {
+      logger.warn("sync aborted: account conflict", {
         cycleAll: cycleAllCourses,
+        kind: err.kind,
         details: err.details,
       });
       return {
         type: "skipped",
         changed: false,
         totalXp,
-        error: ACTIVE_COURSE_CONFLICT_ERROR,
+        error: err.message,
         warnings: err.details,
         timestamp: now,
       };
@@ -277,7 +278,7 @@ async function syncAllCourseDetails(client: DuolingoClient, user: DuolingoUser):
   const originalLearning = user.learningLanguage;
   const originalFrom = user.fromLanguage;
   const warnings: string[] = [];
-  const guard = createActiveCourseGuard(client, originalCourseId, warnings);
+  const guard = createActiveCourseGuard(client, originalCourseId, user.totalXp, warnings);
 
   // Sync the currently active course first (no switch needed)
   await guard.check("before syncing starting course");
@@ -302,7 +303,7 @@ async function syncAllCourseDetails(client: DuolingoClient, user: DuolingoUser):
       await new Promise((r) => setTimeout(r, 1000));
       await saveLanguageDetails(client, course.id, course.learningLanguage, guard);
     } catch (err) {
-      if (isActiveCourseConflictError(err)) throw err;
+      if (isAccountConflictError(err)) throw err;
       logger.warn("course sync skipped", {
         courseId: course.id,
         error: err instanceof Error ? err.message : String(err),
@@ -321,7 +322,7 @@ async function syncAllCourseDetails(client: DuolingoClient, user: DuolingoUser):
       guard.expect(originalCourseId);
       await guard.check("after restoring starting course");
     } catch (err) {
-      if (isActiveCourseConflictError(err)) throw err;
+      if (isAccountConflictError(err)) throw err;
       const message = err instanceof Error ? err.message : String(err);
       logger.error("course restore failed", { courseId: originalCourseId, error: message });
       throw new Error(`Failed to restore active course: ${message}`);
@@ -330,11 +331,14 @@ async function syncAllCourseDetails(client: DuolingoClient, user: DuolingoUser):
   return warnings;
 }
 
-async function readActiveCourseId(client: DuolingoClient): Promise<string | null> {
+async function readAccountGuardObservation(
+  client: DuolingoClient,
+): Promise<{ activeCourseId: string; totalXp: number } | null> {
   try {
-    return (await client.getUser()).currentCourseId;
+    const user = await client.getUser();
+    return { activeCourseId: user.currentCourseId, totalXp: user.totalXp };
   } catch (err) {
-    logger.debug("active course check failed", {
+    logger.debug("account guard observation failed", {
       error: err instanceof Error ? err.message : String(err),
     });
     return null;
@@ -349,20 +353,46 @@ type ActiveCourseGuard = {
 function createActiveCourseGuard(
   client: DuolingoClient,
   expectedCourseId: string,
+  expectedTotalXp?: number,
   details: string[] = [],
 ): ActiveCourseGuard {
   let expected = expectedCourseId;
+  const expectedXp = expectedTotalXp;
   return {
     expect(courseId: string) {
       expected = courseId;
     },
     async check(context: string): Promise<void> {
-      const activeCourseId = await readActiveCourseId(client);
-      if (!activeCourseId || activeCourseId === expected) return;
-      const detail = `Active course changed outside this sync ${context}: expected ${expected}, saw ${activeCourseId}`;
-      details.push(detail);
-      logger.warn("active course drift", { context, expectedCourseId: expected, activeCourseId });
-      throw new ActiveCourseConflictError([...details]);
+      const observation = await readAccountGuardObservation(client);
+      if (!observation) return;
+
+      const xpDrifted = expectedXp !== undefined && observation.totalXp !== expectedXp;
+      const courseDrifted = observation.activeCourseId !== expected;
+
+      if (xpDrifted) {
+        const detail = `XP changed outside this sync ${context}: expected ${expectedXp}, saw ${observation.totalXp}`;
+        details.push(detail);
+        logger.warn("account XP drift", {
+          context,
+          expectedXp,
+          observedXp: observation.totalXp,
+        });
+      }
+
+      if (courseDrifted) {
+        const detail = `Active course changed outside this sync ${context}: expected ${expected}, saw ${observation.activeCourseId}`;
+        details.push(detail);
+        logger.warn("active course drift", {
+          context,
+          expectedCourseId: expected,
+          activeCourseId: observation.activeCourseId,
+        });
+        throw new ActiveCourseConflictError([...details]);
+      }
+
+      if (xpDrifted) {
+        throw new XpConflictError([...details]);
+      }
     },
   };
 }
@@ -518,7 +548,7 @@ async function saveLanguageDetails(
         }));
       }
     } catch (err) {
-      if (isActiveCourseConflictError(err)) throw err;
+      if (isAccountConflictError(err)) throw err;
       logger.debug("vocabulary fetch failed", {
         courseId,
         error: err instanceof Error ? err.message : String(err),
@@ -542,7 +572,7 @@ async function saveLanguageDetails(
         result.skillSource = snapshot.source;
       }
     } catch (err) {
-      if (isActiveCourseConflictError(err)) throw err;
+      if (isAccountConflictError(err)) throw err;
       logger.debug("skill fetch failed", {
         courseId,
         error: err instanceof Error ? err.message : String(err),
@@ -558,7 +588,7 @@ async function saveLanguageDetails(
         draft.mistakeCount = mistakeCount;
       }
     } catch (err) {
-      if (isActiveCourseConflictError(err)) throw err;
+      if (isAccountConflictError(err)) throw err;
       logger.debug("mistake fetch failed", {
         courseId,
         error: err instanceof Error ? err.message : String(err),
@@ -570,8 +600,8 @@ async function saveLanguageDetails(
     saveCourseDetailDraft(courseId, draft);
     return result;
   } catch (err) {
-    if (isActiveCourseConflictError(err)) {
-      logger.warn("course detail writes skipped after active course drift", {
+    if (isAccountConflictError(err)) {
+      logger.warn("course detail writes skipped after account drift", {
         courseId,
         details: err.details,
       });
@@ -615,7 +645,7 @@ export async function syncCourseDetails(
   const originalLearning = user.learningLanguage;
   const originalFrom = user.fromLanguage;
   const needsSwitch = originalCourseId !== courseId;
-  const guard = createActiveCourseGuard(client, originalCourseId, details);
+  const guard = createActiveCourseGuard(client, originalCourseId, user.totalXp, details);
   let switchedBack = !needsSwitch;
 
   try {
@@ -651,7 +681,7 @@ export async function syncCourseDetails(
         switchedBack = true;
         details.push(`Switched back to ${originalCourseId}`);
       } catch (err) {
-        if (isActiveCourseConflictError(err)) throw err;
+        if (isAccountConflictError(err)) throw err;
         switchedBack = false;
         details.push(`Failed to switch back: ${err instanceof Error ? err.message : String(err)}`);
         return {
@@ -665,11 +695,11 @@ export async function syncCourseDetails(
 
     return { success: true, switchedBack, details };
   } catch (err) {
-    if (isActiveCourseConflictError(err)) {
+    if (isAccountConflictError(err)) {
       return {
         success: false,
         switchedBack: false,
-        error: ACTIVE_COURSE_CONFLICT_ERROR,
+        error: err.message,
         details: err.details,
       };
     }
@@ -682,11 +712,11 @@ export async function syncCourseDetails(
         switchedBack = true;
       } catch (restoreErr) {
         switchedBack = false;
-        if (isActiveCourseConflictError(restoreErr)) {
+        if (isAccountConflictError(restoreErr)) {
           return {
             success: false,
             switchedBack: false,
-            error: ACTIVE_COURSE_CONFLICT_ERROR,
+            error: restoreErr.message,
             details: restoreErr.details,
           };
         }
