@@ -49,6 +49,13 @@ function setupMocks(overrides: Partial<StatusMocks> = {}): StatusMocks {
         jitterUntilMs: 1_700_000_000_000,
         msUntilJitterRetry: 45_000,
       },
+      courseOrderRecovery: {
+        active: true,
+        originalCourseId: "course-a",
+        courseIds: ["course-a", "course-b"],
+        capturedAtMs: 1_699_999_900_000,
+        conflictReason: "active_course",
+      },
       accountQuiet: {
         active: true,
         reason: "active_course_conflict",
@@ -163,6 +170,13 @@ describe("GET /api/status", () => {
         jitterUntilMs: 1_700_000_000_000,
         msUntilJitterRetry: 45_000,
       },
+      courseOrderRecovery: {
+        active: true,
+        originalCourseId: "course-a",
+        courseIds: ["course-a", "course-b"],
+        capturedAtMs: 1_699_999_900_000,
+        conflictReason: "active_course",
+      },
       accountQuiet: {
         active: true,
         reason: "active_course_conflict",
@@ -213,6 +227,13 @@ describe("GET /api/status", () => {
         lastObservedCourseId: null,
         jitterUntilMs: null,
         msUntilJitterRetry: null,
+      },
+      courseOrderRecovery: {
+        active: false,
+        originalCourseId: null,
+        courseIds: [],
+        capturedAtMs: null,
+        conflictReason: null,
       },
       accountQuiet: {
         active: false,

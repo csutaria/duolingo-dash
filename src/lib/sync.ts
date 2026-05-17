@@ -24,10 +24,30 @@ import {
   ActiveCourseConflictError,
   XpConflictError,
   isAccountConflictError,
+  type AccountConflictKind,
 } from "./sync-conflict";
 import { logger } from "./logger";
 
 type SkillSnapshotInput = Parameters<typeof snapshotSkills>[1][number];
+
+export type CourseOrderRecoveryCourse = {
+  id: string;
+  learningLanguage: string;
+  fromLanguage: string;
+};
+
+export type CourseOrderRecoveryTarget = {
+  capturedAtMs: number;
+  originalCourseId: string;
+  originalLearningLanguage: string;
+  originalFromLanguage: string;
+  courses: CourseOrderRecoveryCourse[];
+  conflictReason?: AccountConflictKind;
+};
+
+export type FullSyncOptions = {
+  courseOrderRecoveryTarget?: CourseOrderRecoveryTarget | null;
+};
 
 export interface SyncResult {
   type: "quick" | "full" | "skipped";
@@ -35,6 +55,7 @@ export interface SyncResult {
   totalXp: number;
   error?: string;
   warnings?: string[];
+  courseOrderRecoveryTarget?: CourseOrderRecoveryTarget | null;
   timestamp: string;
 }
 
@@ -47,10 +68,17 @@ export async function quickCheck(
   return { changed: lastXp === null || currentXp !== lastXp, currentXp };
 }
 
-export async function fullSync(client: DuolingoClient, cycleAllCourses = false): Promise<SyncResult> {
+export async function fullSync(
+  client: DuolingoClient,
+  cycleAllCourses = false,
+  options: FullSyncOptions = {},
+): Promise<SyncResult> {
   const now = new Date().toISOString();
   const startedAtMs = Date.now();
   let totalXp = 0;
+  let courseOrderRecoveryTarget: CourseOrderRecoveryTarget | undefined;
+  let courseOrderMayHaveMutated = false;
+  let clearCourseOrderRecoveryTarget = false;
 
   setCurrentSync(cycleAllCourses ? "cycle" : "single");
   logger.info("sync start", { cycleAll: cycleAllCourses });
@@ -78,7 +106,25 @@ export async function fullSync(client: DuolingoClient, cycleAllCourses = false):
 
     let warnings: string[] = [];
     if (cycleAllCourses) {
-      warnings = await syncAllCourseDetails(client, user);
+      const targetResolution = resolveCourseOrderRecoveryTarget(
+        user,
+        options.courseOrderRecoveryTarget,
+      );
+      courseOrderRecoveryTarget = targetResolution.target;
+      clearCourseOrderRecoveryTarget = targetResolution.clearRequestedTarget;
+      if (targetResolution.warning) {
+        warnings.push(targetResolution.warning);
+      }
+      warnings.push(
+        ...(await syncAllCourseDetails(
+          client,
+          user,
+          targetResolution.useRecoveryTarget ? targetResolution.target : null,
+          () => {
+            courseOrderMayHaveMutated = true;
+          },
+        )),
+      );
     } else {
       const guard = createActiveCourseGuard(client, user.currentCourseId, user.totalXp);
       await saveLanguageDetails(client, user.currentCourseId, user.learningLanguage, guard);
@@ -114,6 +160,11 @@ export async function fullSync(client: DuolingoClient, cycleAllCourses = false):
         totalXp,
         error: err.message,
         warnings: err.details,
+        courseOrderRecoveryTarget: courseOrderMayHaveMutated && courseOrderRecoveryTarget
+          ? withConflictReason(courseOrderRecoveryTarget, err.kind)
+          : clearCourseOrderRecoveryTarget
+            ? null
+            : undefined,
         timestamp: now,
       };
     }
@@ -273,7 +324,119 @@ function saveAchievements(achievements: Array<Record<string, unknown> | { name?:
   upsertAchievements(mapped);
 }
 
-async function syncAllCourseDetails(client: DuolingoClient, user: DuolingoUser): Promise<string[]> {
+function createCourseOrderRecoveryTarget(user: DuolingoUser): CourseOrderRecoveryTarget {
+  return {
+    capturedAtMs: Date.now(),
+    originalCourseId: user.currentCourseId,
+    originalLearningLanguage: user.learningLanguage,
+    originalFromLanguage: user.fromLanguage,
+    courses: user.courses.map((course) => ({
+      id: course.id,
+      learningLanguage: course.learningLanguage,
+      fromLanguage: course.fromLanguage,
+    })),
+  };
+}
+
+function withConflictReason(
+  target: CourseOrderRecoveryTarget,
+  conflictReason: AccountConflictKind,
+): CourseOrderRecoveryTarget {
+  return { ...target, conflictReason };
+}
+
+function courseIds(courses: CourseOrderRecoveryCourse[]): string[] {
+  return courses.map((course) => course.id);
+}
+
+function hasCompatibleCourseSet(
+  user: DuolingoUser,
+  target: CourseOrderRecoveryTarget,
+): boolean {
+  if (!target.courses.some((course) => course.id === target.originalCourseId)) {
+    return false;
+  }
+  const currentIds = new Set(user.courses.map((course) => course.id));
+  const targetIds = new Set(target.courses.map((course) => course.id));
+  if (currentIds.size !== user.courses.length || targetIds.size !== target.courses.length) {
+    return false;
+  }
+  if (currentIds.size !== targetIds.size) {
+    return false;
+  }
+  for (const id of currentIds) {
+    if (!targetIds.has(id)) return false;
+  }
+  return true;
+}
+
+function resolveCourseOrderRecoveryTarget(
+  user: DuolingoUser,
+  requestedTarget?: CourseOrderRecoveryTarget | null,
+): {
+  target: CourseOrderRecoveryTarget;
+  useRecoveryTarget: boolean;
+  clearRequestedTarget: boolean;
+  warning?: string;
+} {
+  const freshTarget = createCourseOrderRecoveryTarget(user);
+  if (!requestedTarget) {
+    return { target: freshTarget, useRecoveryTarget: false, clearRequestedTarget: false };
+  }
+
+  if (hasCompatibleCourseSet(user, requestedTarget)) {
+    logger.info("course order recovery target accepted", {
+      originalCourseId: requestedTarget.originalCourseId,
+      courseIds: courseIds(requestedTarget.courses),
+      capturedAtMs: requestedTarget.capturedAtMs,
+      conflictReason: requestedTarget.conflictReason ?? null,
+    });
+    return { target: requestedTarget, useRecoveryTarget: true, clearRequestedTarget: false };
+  }
+
+  const warning = "Stored course-order recovery target no longer matches current course set; using current order";
+  logger.warn("course order recovery target incompatible", {
+    targetCourseIds: courseIds(requestedTarget.courses),
+    currentCourseIds: user.courses.map((course) => course.id),
+    targetOriginalCourseId: requestedTarget.originalCourseId,
+    currentCourseId: user.currentCourseId,
+  });
+  return { target: freshTarget, useRecoveryTarget: false, clearRequestedTarget: true, warning };
+}
+
+function buildCourseOrderVisitSequence(target: CourseOrderRecoveryTarget): CourseOrderRecoveryCourse[] {
+  const original = target.courses.find((course) => course.id === target.originalCourseId);
+  if (!original) return [];
+  const sequence: CourseOrderRecoveryCourse[] = [];
+  for (let i = target.courses.length - 1; i >= 0; i--) {
+    const course = target.courses[i];
+    if (course.id !== target.originalCourseId) {
+      sequence.push(course);
+    }
+  }
+  sequence.push({
+    id: target.originalCourseId,
+    learningLanguage: target.originalLearningLanguage,
+    fromLanguage: target.originalFromLanguage,
+  });
+  return sequence;
+}
+
+async function syncAllCourseDetails(
+  client: DuolingoClient,
+  user: DuolingoUser,
+  recoveryTarget: CourseOrderRecoveryTarget | null = null,
+  onCourseOrderMutated: () => void = () => {},
+): Promise<string[]> {
+  if (recoveryTarget) {
+    return syncAllCourseDetailsWithRecoveryTarget(
+      client,
+      user,
+      recoveryTarget,
+      onCourseOrderMutated,
+    );
+  }
+
   const originalCourseId = user.currentCourseId;
   const originalLearning = user.learningLanguage;
   const originalFrom = user.fromLanguage;
@@ -297,6 +460,7 @@ async function syncAllCourseDetails(client: DuolingoClient, user: DuolingoUser):
     try {
       await guard.check(`before switching to ${course.id}`);
       logger.debug("course switch start", { courseId: course.id });
+      onCourseOrderMutated();
       await client.switchCourse(course.id, course.learningLanguage, course.fromLanguage);
       guard.expect(course.id);
       await guard.check(`after switching to ${course.id}`);
@@ -318,6 +482,7 @@ async function syncAllCourseDetails(client: DuolingoClient, user: DuolingoUser):
   if (user.courses.length > 1) {
     try {
       logger.debug("course restore start", { courseId: originalCourseId });
+      onCourseOrderMutated();
       await client.switchCourse(originalCourseId, originalLearning, originalFrom);
       guard.expect(originalCourseId);
       await guard.check("after restoring starting course");
@@ -328,6 +493,49 @@ async function syncAllCourseDetails(client: DuolingoClient, user: DuolingoUser):
       throw new Error(`Failed to restore active course: ${message}`);
     }
   }
+  return warnings;
+}
+
+async function syncAllCourseDetailsWithRecoveryTarget(
+  client: DuolingoClient,
+  user: DuolingoUser,
+  target: CourseOrderRecoveryTarget,
+  onCourseOrderMutated: () => void,
+): Promise<string[]> {
+  const warnings: string[] = [];
+  const guard = createActiveCourseGuard(client, user.currentCourseId, user.totalXp, warnings);
+  const sequence = buildCourseOrderVisitSequence(target);
+  let expectedCourseId = user.currentCourseId;
+
+  logger.info("course order recovery start", {
+    originalCourseId: target.originalCourseId,
+    courseIds: courseIds(target.courses),
+    capturedAtMs: target.capturedAtMs,
+    conflictReason: target.conflictReason ?? null,
+  });
+
+  for (const course of sequence) {
+    try {
+      await guard.check(`before course-order recovery switch to ${course.id}`);
+      if (expectedCourseId !== course.id) {
+        logger.debug("course order recovery switch start", { courseId: course.id });
+        onCourseOrderMutated();
+        await client.switchCourse(course.id, course.learningLanguage, course.fromLanguage);
+        expectedCourseId = course.id;
+        guard.expect(course.id);
+        await guard.check(`after course-order recovery switch to ${course.id}`);
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      await saveLanguageDetails(client, course.id, course.learningLanguage, guard);
+    } catch (err) {
+      if (isAccountConflictError(err)) throw err;
+      logger.warn("course order recovery course skipped", {
+        courseId: course.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   return warnings;
 }
 

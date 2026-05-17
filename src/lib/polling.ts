@@ -1,5 +1,5 @@
 import { DuolingoClient } from "./duolingo";
-import { quickCheck, fullSync, SyncResult } from "./sync";
+import { quickCheck, fullSync, type CourseOrderRecoveryTarget, type SyncResult } from "./sync";
 import { getCurrentSync, CurrentSync } from "./sync-state";
 import { getPollingState, type AutomaticCycleReason } from "./polling-state";
 import { epochMsForLocalTime, getLocalParts } from "./tz";
@@ -190,6 +190,7 @@ function enterAccountQuietMode(
   seed?: Partial<AccountObservation>,
 ): void {
   const state = getPollingState();
+  const recoveryTarget = state.courseOrderRecoveryTarget;
   state.client = client;
   state.mode = reason === "active_course_conflict" ? "course_conflict" : "fast";
   state.fastLastObservedXp = seed?.totalXp ?? null;
@@ -201,6 +202,8 @@ function enterAccountQuietMode(
     reason,
     seedXp: seed?.totalXp ?? null,
     seedCourseId: seed?.currentCourseId ?? null,
+    recoveringCourseOrder: recoveryTarget !== null,
+    recoveryOriginalCourseId: recoveryTarget?.originalCourseId ?? null,
   });
   if (state.fastTimer) return;
   state.fastTimer = setInterval(() => {
@@ -215,6 +218,7 @@ function exitFastMode(): void {
   state.fastConsecutiveIdleTicks = 0;
   state.accountQuietLastObservedCourseId = null;
   state.automaticCycleReason = null;
+  state.courseOrderRecoveryTarget = null;
   clearAccountQuietJitter();
   if (state.fastTimer) {
     clearInterval(state.fastTimer);
@@ -339,7 +343,12 @@ function scheduleAccountQuietJitter(client: DuolingoClient): void {
 async function retryAutomaticCycle(client: DuolingoClient): Promise<void> {
   const state = getPollingState();
   if (state.mode !== "fast" && state.mode !== "course_conflict") return;
-  logger.info("account quiet jitter retry", { reason: state.automaticCycleReason });
+  const recoveryTarget = state.courseOrderRecoveryTarget;
+  logger.info("account quiet jitter retry", {
+    reason: state.automaticCycleReason,
+    recoveringCourseOrder: recoveryTarget !== null,
+    recoveryOriginalCourseId: recoveryTarget?.originalCourseId ?? null,
+  });
 
   const observation = await readAccountObservation(client);
   if (!observation) {
@@ -365,8 +374,11 @@ async function retryAutomaticCycle(client: DuolingoClient): Promise<void> {
     return;
   }
   try {
-    state.lastSyncResult = await fullSync(client, true);
+    state.lastSyncResult = recoveryTarget
+      ? await fullSync(client, true, { courseOrderRecoveryTarget: recoveryTarget })
+      : await fullSync(client, true);
     if (isAccountConflictResult(state.lastSyncResult)) {
+      rememberCourseOrderRecoveryTarget(state.lastSyncResult.courseOrderRecoveryTarget);
       enterAccountQuietMode(
         client,
         state.lastSyncResult.error === ACTIVE_COURSE_CONFLICT_ERROR
@@ -410,6 +422,23 @@ function accountObservationChanged(
     || (state.accountQuietLastObservedCourseId !== null
       && observation.currentCourseId !== state.accountQuietLastObservedCourseId)
   );
+}
+
+function rememberCourseOrderRecoveryTarget(target: CourseOrderRecoveryTarget | null | undefined): void {
+  if (target === undefined) return;
+  const state = getPollingState();
+  if (target === null) {
+    state.courseOrderRecoveryTarget = null;
+    logger.info("course order recovery target cleared");
+    return;
+  }
+  state.courseOrderRecoveryTarget = target;
+  logger.info("course order recovery target stored", {
+    originalCourseId: target.originalCourseId,
+    courseIds: target.courses.map((course) => course.id),
+    capturedAtMs: target.capturedAtMs,
+    conflictReason: target.conflictReason ?? null,
+  });
 }
 
 /** @internal tests */
@@ -508,6 +537,7 @@ export function stopPolling(): void {
   state.fastConsecutiveIdleTicks = 0;
   state.accountQuietLastObservedCourseId = null;
   state.automaticCycleReason = null;
+  state.courseOrderRecoveryTarget = null;
 }
 
 export async function manualRefresh(client: DuolingoClient): Promise<SyncResult & { cooldownRemaining?: number }> {
@@ -563,6 +593,13 @@ export type SyncTimingStatus = {
     jitterUntilMs: number | null;
     msUntilJitterRetry: number | null;
   };
+  courseOrderRecovery: {
+    active: boolean;
+    originalCourseId: string | null;
+    courseIds: string[];
+    capturedAtMs: number | null;
+    conflictReason: string | null;
+  };
   accountQuiet: {
     active: boolean;
     reason: AutomaticCycleReason | null;
@@ -575,6 +612,7 @@ export type SyncTimingStatus = {
 export function getSyncTimingStatus(): SyncTimingStatus {
   const state = getPollingState();
   const now = Date.now();
+  const recoveryTarget = state.courseOrderRecoveryTarget;
 
   // In fast mode we don't track a per-tick timestamp; the best estimate is
   // "within FAST_POLL_MS". In baseline we derive from lastBaselineTickAtMs.
@@ -603,6 +641,13 @@ export function getSyncTimingStatus(): SyncTimingStatus {
       msUntilJitterRetry: state.accountQuietJitterUntilMs === null
         ? null
         : Math.max(0, state.accountQuietJitterUntilMs - now),
+    },
+    courseOrderRecovery: {
+      active: recoveryTarget !== null,
+      originalCourseId: recoveryTarget?.originalCourseId ?? null,
+      courseIds: recoveryTarget?.courses.map((course) => course.id) ?? [],
+      capturedAtMs: recoveryTarget?.capturedAtMs ?? null,
+      conflictReason: recoveryTarget?.conflictReason ?? null,
     },
     accountQuiet: {
       active: state.mode === "fast" || state.mode === "course_conflict",
@@ -638,6 +683,7 @@ export function rescheduleNightly(): void {
 export function notifyAllCourseSyncComplete(): void {
   const state = getPollingState();
   state.lastNightlyAtMs = Date.now();
+  state.courseOrderRecoveryTarget = null;
   if (state.mode === "fast" || state.mode === "course_conflict") {
     exitFastMode();
   }
@@ -656,4 +702,5 @@ export function resetPollingStateForTests(): void {
   state.accountQuietLastObservedCourseId = null;
   state.accountQuietJitterUntilMs = null;
   state.automaticCycleReason = null;
+  state.courseOrderRecoveryTarget = null;
 }

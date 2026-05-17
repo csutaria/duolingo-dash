@@ -55,6 +55,7 @@ Browser (Next.js client) ─► Next.js API routes (server) ─► duolingo.com
 | `isRunning`                                                     | Global single-flight mutex                                 | Yes                       |
 | `mode`                                                          | `"baseline"`, `"fast"`, or `"course_conflict"`             | Yes                       |
 | `fastLastObservedXp` / `fastConsecutiveIdleTicks` / `accountQuietLastObservedCourseId` / `automaticCycleReason` | Account-quiet bookkeeping | Yes                       |
+| `courseOrderRecoveryTarget`                                     | Pre-cycle selector order retained after an automatic cycle conflict | Yes                       |
 | `lastBaselineTickAtMs` / `lastNightlyAtMs` / `lastManualRefreshAtMs` | Timing for cadence + cooldown                         | Yes                       |
 | `lastSyncResult`                                                | Most recent `SyncResult` for UI                            | Yes                       |
 | `currentSync` (in `sync-state.ts`, separate)                    | `{ type, startedAtMs }` for an active `fullSync`           | Yes                       |
@@ -184,7 +185,7 @@ Activated by env: `DUOLINGO_READ_ONLY=1` (also `true`/`yes`, case-insensitive). 
 | `POST /api/sync` | Returns `503 { "error": "read-only" }`. |
 | `POST /api/sync-course` | Returns `503 { "error": "read-only" }`. |
 | `POST /api/polling` | Returns `503 { "error": "read-only" }`. |
-| `GET /api/status` | Returns the **same shape** as the normal-mode payload, with sentinel values for fields that don't apply: `readOnly: true`, `instanceRole: "read-only"`, `authenticated: false`, `polling: false`, `paused: false`, `currentlyRunning: false`, `currentSync: null`, `localSyncState: { isRunning: false, currentSync: null }`, `expectedDurationMs: { single: null, cycle: null }`, `lastSyncResult: null`, `msUntilNextXpCheck: null`, `msUntilNextNightlySync: null`, `syncMode: "baseline"`, `fastIdleTicks: 0`, `fastIdleTicksRequired: 5`, `accountQuiet: { active: false, reason: null, lastObservedCourseId: null, jitterUntilMs: null, msUntilJitterRetry: null }`, `courseConflict: { active: false, lastObservedCourseId: null, jitterUntilMs: null, msUntilJitterRetry: null }`. `dbStatus`, `resolvedTimezone`, `resolvedTimezoneSource`, `timezoneOverride`, `nightlyHour`, and `externalSyncLockConfigured` are real values read at request time. The shape parity is intentional — the UI takes one render path for both modes. `getAppSettings()` is read-defensive when the table is missing on an un-migrated DB. |
+| `GET /api/status` | Returns the **same shape** as the normal-mode payload, with sentinel values for fields that don't apply: `readOnly: true`, `instanceRole: "read-only"`, `authenticated: false`, `polling: false`, `paused: false`, `currentlyRunning: false`, `currentSync: null`, `localSyncState: { isRunning: false, currentSync: null }`, `expectedDurationMs: { single: null, cycle: null }`, `lastSyncResult: null`, `msUntilNextXpCheck: null`, `msUntilNextNightlySync: null`, `syncMode: "baseline"`, `fastIdleTicks: 0`, `fastIdleTicksRequired: 5`, `accountQuiet: { active: false, reason: null, lastObservedCourseId: null, jitterUntilMs: null, msUntilJitterRetry: null }`, `courseConflict: { active: false, lastObservedCourseId: null, jitterUntilMs: null, msUntilJitterRetry: null }`, `courseOrderRecovery: { active: false, originalCourseId: null, courseIds: [], capturedAtMs: null, conflictReason: null }`. `dbStatus`, `resolvedTimezone`, `resolvedTimezoneSource`, `timezoneOverride`, `nightlyHour`, and `externalSyncLockConfigured` are real values read at request time. The shape parity is intentional — the UI takes one render path for both modes. `getAppSettings()` is read-defensive when the table is missing on an un-migrated DB. |
 | `SyncBar` UI | Renders a blue **"Read-only"** pill in the header and hides Refresh / Sync All from the status panel. The status panel shows "Display-only instance. Writes are disabled." instead of the manual sync and pause controls. The `Last sync` row + Timezone row still render from `dbStatus`. |
 
 Caveats and follow-ups (these are why this is a "display" mode, not "follower" mode):
@@ -241,7 +242,10 @@ Guards:
   active course must both stay stable for 5 observations. After quiet is
   satisfied, Dash waits a random 30-120 s jitter and performs one final account
   observation before acquiring the sync gate. Gate-busy, final-precheck changes,
-  or another drift send it back to monitoring. Manual sync routes return
+  or another drift send it back to monitoring. If an automatic cycle had already
+  started switching courses before the conflict, polling retains that cycle's
+  original selector order and the retry uses it as the restoration target when
+  the current course set is still compatible. Manual sync routes return
   conflicts immediately and do not schedule retry.
 - `startPolling` is idempotent: `if (state.baselineTimer) return;` — re-entrant calls (HMR, multiple `ensureClient`s) are no-ops.
 - Kickoff `baselineTick` runs once on start, but **only if** `isRunning === false` **and** `getCurrentSync() == null` (regression guard, commit 84935f3).
@@ -268,7 +272,7 @@ Logging:
 
 ## Sync pipeline (`fullSync`)
 
-`fullSync(client, cycleAllCourses)` in `src/lib/sync.ts`:
+`fullSync(client, cycleAllCourses, options?)` in `src/lib/sync.ts`:
 
 1. `setCurrentSync("single" | "cycle")` — populates `sync-state` for UI/progress.
 2. Endpoint ① (`getUser`) → profile, course snapshots, XP daily history.
@@ -278,14 +282,17 @@ Logging:
 4. Achievements, if present.
 5. Course detail:
   - `cycleAllCourses = false` → `saveLanguageDetails` for the active course only (endpoints ⑤, ⑦).
-  - `cycleAllCourses = true` → `syncAllCourseDetails` cycles through every course via endpoint ⑥ (`PATCH /users/{id}`) — **this is account-wide and visible in the real Duolingo app**. Each PATCH moves its target to the top of the account's course-selector (a recency stack), and the API-returned `user.courses` array mirrors that order. The cycle visits non-active courses in **reverse of `user.courses`** and restores the active course last — the identity permutation, so the selector ends the cycle in the exact order the user started with.
+  - `cycleAllCourses = true` → `syncAllCourseDetails` cycles through every course via endpoint ⑥ (`PATCH /users/{id}`) — **this is account-wide and visible in the real Duolingo app**. Each PATCH moves its target to the top of the account's course-selector (a recency stack), and the API-returned `user.courses` array mirrors that order. The cycle visits non-active courses in **reverse of the target selector order** and restores the original active course last — the identity permutation, so the selector ends the cycle in the exact order the user started with. Normal cycles use the fresh `user.courses` order; automatic conflict recovery may pass a preserved `courseOrderRecoveryTarget` captured before the interrupted cycle began.
   - During course-cycling syncs, Dash records the expected active course and
     starting total XP, treats its own switches as expected active-course
     changes, and re-reads endpoint ① before/after every switch and every
     active-course-dependent fetch. Unexpected active-course drift throws
     `ActiveCourseConflictError`; unexpected XP drift throws `XpConflictError`.
     Either conflict stops the sync and prevents further switches. Dash does
-    **not** restore over another actor's active course after drift.
+    **not** restore over another actor's active course inline after drift. For
+    automatic cycles, the skipped `SyncResult` carries the pre-cycle order so
+    polling can retry later after quiet/backoff without baking in a half-cycled
+    selector order.
   - Course-dependent detail writes are drift-atomic per course. Vocab, skills
     / path-derived details, and mistake count are collected into an in-memory
     draft and written only after all account guard checks for that course have
@@ -324,7 +331,7 @@ Progress is derived client-side as `min(1, elapsed / expectedDurationMs[type])` 
 
 | Route              | Method                                              | Purpose                                                                                                                                                                                             |
 | ------------------ | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/api/status`      | `GET`                                               | Auth state, `instanceRole`, `externalSyncLockConfigured`, polling on/off, `paused`, `currentlyRunning`, `currentSync`, `localSyncState`, `expectedDurationMs.{single,cycle}`, last sync result, DB status, `msUntilNextXpCheck`, `msUntilNextNightlySync`, `syncMode` (`"baseline"`/`"fast"`/`"course_conflict"`), `fastIdleTicks`, `fastIdleTicksRequired`, `accountQuiet.{active,reason,lastObservedCourseId,jitterUntilMs,msUntilJitterRetry}`, `courseConflict.{active,lastObservedCourseId,jitterUntilMs,msUntilJitterRetry}` for the conflict-specific subset, **`nightlyHour`** (effective `0..23` in **R**), **`resolvedTimezone`** (IANA **R**), **`resolvedTimezoneSource`** (`settings` / `env` / `profile` / `system`), **`timezoneOverride`** (raw stored `app_settings.timezone_override`, `null` when unset), **`readOnly`** (`true` when role is read-only). Primary source for UI polling state. |
+| `/api/status`      | `GET`                                               | Auth state, `instanceRole`, `externalSyncLockConfigured`, polling on/off, `paused`, `currentlyRunning`, `currentSync`, `localSyncState`, `expectedDurationMs.{single,cycle}`, last sync result, DB status, `msUntilNextXpCheck`, `msUntilNextNightlySync`, `syncMode` (`"baseline"`/`"fast"`/`"course_conflict"`), `fastIdleTicks`, `fastIdleTicksRequired`, `accountQuiet.{active,reason,lastObservedCourseId,jitterUntilMs,msUntilJitterRetry}`, `courseConflict.{active,lastObservedCourseId,jitterUntilMs,msUntilJitterRetry}` for the conflict-specific subset, `courseOrderRecovery.{active,originalCourseId,courseIds,capturedAtMs,conflictReason}`, **`nightlyHour`** (effective `0..23` in **R**), **`resolvedTimezone`** (IANA **R**), **`resolvedTimezoneSource`** (`settings` / `env` / `profile` / `system`), **`timezoneOverride`** (raw stored `app_settings.timezone_override`, `null` when unset), **`readOnly`** (`true` when role is read-only). Primary source for UI polling state. |
 | `/api/polling`     | `POST { action: "pause" | "resume" }`               | Toggle `userPaused`. Returns `{ paused, polling }`. 400 on invalid action. **503 `{ error: "read-only" }`** in read-only mode.                                                                       |
 | `/api/settings`    | `GET` / `POST`                                      | `GET` → `{ nightlyHour, timezoneOverride }` (effective `nightlyHour`, raw stored `timezoneOverride`). `POST { nightlyHour?: 0..23 \| null, timezoneOverride?: string \| null }` updates `app_settings`. Side effects: a `nightlyHour` change re-arms the nightly `setTimeout` via `rescheduleNightly()`; a `timezoneOverride` change calls `invalidateResolvedTimezone()` so R re-resolves on the next read. `timezoneOverride` is validated as a real IANA zone (via `Intl.DateTimeFormat`) — bogus strings → 400. 400 on any validation failure. **503 `{ error: "read-only" }`** in read-only mode. |
 | `/api/sync`        | `POST { force?: boolean, cycleAll?: boolean }`      | `force=false` (default): `manualRefresh` (respects cooldown + `isRunning`). `force=true`: direct `fullSync(client, cycleAll)`. **503 `{ error: "read-only" }`** in read-only mode.                  |
@@ -335,7 +342,7 @@ Progress is derived client-side as `min(1, elapsed / expectedDurationMs[type])` 
 
 In `DEMO_MODE` (env `DEMO_MODE=true`):
 
-- `/api/status` short-circuits to a small fixture payload (`{ demoMode: true, readOnly, instanceRole, externalSyncLockConfigured, resolvedTimezone, resolvedTimezoneSource, timezoneOverride: null, accountQuiet: <inactive sentinel>, courseConflict: <inactive sentinel> }`) **without reading any DB**. None of the polling/sync/dbStatus fields are populated.
+- `/api/status` short-circuits to a small fixture payload (`{ demoMode: true, readOnly, instanceRole, externalSyncLockConfigured, resolvedTimezone, resolvedTimezoneSource, timezoneOverride: null, accountQuiet: <inactive sentinel>, courseConflict: <inactive sentinel>, courseOrderRecovery: <inactive sentinel> }`) **without reading any DB**. None of the polling/sync/dbStatus fields are populated.
 - `/api/data` reads from `data/mock.db` (seeded by `scripts/seed-mock.js`) instead of `data/duolingo.db`. The path swap happens in `getDb()` (`src/lib/db.ts`); the rest of the read pipeline is unchanged.
 - Neither route requires `DUOLINGO_JWT`.
 

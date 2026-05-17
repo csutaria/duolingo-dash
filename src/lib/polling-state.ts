@@ -1,5 +1,5 @@
 import type { DuolingoClient } from "./duolingo";
-import type { SyncResult } from "./sync";
+import type { CourseOrderRecoveryTarget, SyncResult } from "./sync";
 
 export type AutomaticCycleReason =
   | "xp_changed"
@@ -36,6 +36,7 @@ export type PollingState = {
   accountQuietLastObservedCourseId: string | null;
   accountQuietJitterUntilMs: number | null;
   automaticCycleReason: AutomaticCycleReason | null;
+  courseOrderRecoveryTarget: CourseOrderRecoveryTarget | null;
 
   lastBaselineTickAtMs: number | null;
   lastNightlyAtMs: number | null;
@@ -58,6 +59,7 @@ function initialState(): PollingState {
     accountQuietLastObservedCourseId: null,
     accountQuietJitterUntilMs: null,
     automaticCycleReason: null,
+    courseOrderRecoveryTarget: null,
     lastBaselineTickAtMs: null,
     lastNightlyAtMs: null,
     lastManualRefreshAtMs: 0,

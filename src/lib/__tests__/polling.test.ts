@@ -10,6 +10,7 @@ import {
 } from "../polling";
 import { __resetPollingStateForTests } from "../polling-state";
 import { ACTIVE_COURSE_CONFLICT_ERROR, XP_CONFLICT_ERROR } from "../sync-conflict";
+import type { CourseOrderRecoveryTarget } from "../sync";
 
 describe("shouldKickoffPoll (regression guard for commit 84935f3)", () => {
   it("allows kickoff when nothing is running and no sync is in flight", () => {
@@ -169,6 +170,20 @@ describe("automatic account-quiet cycle behavior", () => {
     } as unknown as Parameters<typeof import("../polling").startPolling>[0];
   }
 
+  function recoveryTarget(): CourseOrderRecoveryTarget {
+    return {
+      capturedAtMs: Date.now() - 1_000,
+      originalCourseId: "A",
+      originalLearningLanguage: "ll-A",
+      originalFromLanguage: "fl-A",
+      conflictReason: "active_course",
+      courses: [
+        { id: "A", learningLanguage: "ll-A", fromLanguage: "fl-A" },
+        { id: "B", learningLanguage: "ll-B", fromLanguage: "fl-B" },
+      ],
+    };
+  }
+
   it("retries automatic cycle-all after quiet plus deterministic jitter", async () => {
     jest.spyOn(Math, "random").mockReturnValue(0);
     const fullSync = jest.fn().mockResolvedValue({
@@ -201,6 +216,39 @@ describe("automatic account-quiet cycle behavior", () => {
     expect(fullSync).toHaveBeenCalledWith(client, true);
     expect(state.mode).toBe("baseline");
     expect(state.accountQuietJitterTimer).toBeNull();
+  });
+
+  it("uses and clears a preserved course-order target after quiet plus jitter", async () => {
+    jest.spyOn(Math, "random").mockReturnValue(0);
+    const target = recoveryTarget();
+    const fullSync = jest.fn().mockResolvedValue({
+      type: "full",
+      changed: true,
+      totalXp: 100,
+      timestamp: new Date().toISOString(),
+    });
+    jest.doMock("../sync", () => ({
+      quickCheck: jest.fn().mockResolvedValue({ changed: false, currentXp: 100 }),
+      fullSync,
+    }));
+
+    const polling = require("../polling") as typeof import("../polling");
+    const { getPollingState } = require("../polling-state") as typeof import("../polling-state");
+    const state = getPollingState();
+    const client = clientForAccountQuiet();
+    state.mode = "course_conflict";
+    state.automaticCycleReason = "active_course_conflict";
+    state.courseOrderRecoveryTarget = target;
+
+    for (let i = 0; i < polling.FAST_IDLE_TRIGGER_TICKS; i++) {
+      await polling.__runFastTickForTests(client);
+    }
+
+    await jest.advanceTimersByTimeAsync(ACCOUNT_QUIET_JITTER_MIN_MS);
+
+    expect(fullSync).toHaveBeenCalledWith(client, true, { courseOrderRecoveryTarget: target });
+    expect(state.mode).toBe("baseline");
+    expect(state.courseOrderRecoveryTarget).toBeNull();
   });
 
   it("nightly enters the same account-quiet gate instead of syncing immediately", async () => {
@@ -265,6 +313,7 @@ describe("automatic account-quiet cycle behavior", () => {
 
   it("returns to account-quiet monitoring when the gate is busy during jitter retry", async () => {
     jest.spyOn(Math, "random").mockReturnValue(0);
+    const target = recoveryTarget();
     const fullSync = jest.fn();
     jest.doMock("../sync", () => ({
       quickCheck: jest.fn().mockResolvedValue({ changed: false, currentXp: 100 }),
@@ -278,6 +327,7 @@ describe("automatic account-quiet cycle behavior", () => {
     const client = clientForAccountQuiet();
     state.mode = "fast";
     state.automaticCycleReason = "xp_changed";
+    state.courseOrderRecoveryTarget = target;
 
     for (let i = 0; i < polling.FAST_IDLE_TRIGGER_TICKS; i++) {
       await polling.__runFastTickForTests(client);
@@ -291,15 +341,18 @@ describe("automatic account-quiet cycle behavior", () => {
     expect(state.accountQuietJitterTimer).toBeNull();
     expect(state.fastTimer).not.toBeNull();
     expect(state.isRunning).toBe(false);
+    expect(state.courseOrderRecoveryTarget).toBe(target);
   });
 
   it("enters course-conflict quiet mode when an automatic cycle detects active-course drift", async () => {
     jest.spyOn(Math, "random").mockReturnValue(0);
+    const target = recoveryTarget();
     const fullSync = jest.fn().mockResolvedValue({
       type: "skipped",
       changed: false,
       totalXp: 100,
       error: ACTIVE_COURSE_CONFLICT_ERROR,
+      courseOrderRecoveryTarget: target,
       timestamp: new Date().toISOString(),
     });
     jest.doMock("../sync", () => ({
@@ -324,6 +377,41 @@ describe("automatic account-quiet cycle behavior", () => {
     expect(state.automaticCycleReason).toBe("active_course_conflict");
     expect(state.fastConsecutiveIdleTicks).toBe(0);
     expect(state.accountQuietJitterTimer).toBeNull();
+    expect(state.courseOrderRecoveryTarget).toBe(target);
+  });
+
+  it("clears a stale course-order target when a retry reports it incompatible", async () => {
+    jest.spyOn(Math, "random").mockReturnValue(0);
+    const target = recoveryTarget();
+    const fullSync = jest.fn().mockResolvedValue({
+      type: "skipped",
+      changed: false,
+      totalXp: 100,
+      error: ACTIVE_COURSE_CONFLICT_ERROR,
+      courseOrderRecoveryTarget: null,
+      timestamp: new Date().toISOString(),
+    });
+    jest.doMock("../sync", () => ({
+      quickCheck: jest.fn().mockResolvedValue({ changed: false, currentXp: 100 }),
+      fullSync,
+    }));
+
+    const polling = require("../polling") as typeof import("../polling");
+    const { getPollingState } = require("../polling-state") as typeof import("../polling-state");
+    const state = getPollingState();
+    const client = clientForAccountQuiet();
+    state.mode = "course_conflict";
+    state.automaticCycleReason = "active_course_conflict";
+    state.courseOrderRecoveryTarget = target;
+
+    for (let i = 0; i < polling.FAST_IDLE_TRIGGER_TICKS; i++) {
+      await polling.__runFastTickForTests(client);
+    }
+    await jest.advanceTimersByTimeAsync(ACCOUNT_QUIET_JITTER_MIN_MS);
+
+    expect(fullSync).toHaveBeenCalledWith(client, true, { courseOrderRecoveryTarget: target });
+    expect(state.mode).toBe("course_conflict");
+    expect(state.courseOrderRecoveryTarget).toBeNull();
   });
 
   it("returns to account-quiet monitoring when an automatic cycle detects XP drift", async () => {

@@ -18,8 +18,8 @@ No setup beyond `npm install`. Tests use an in-memory SQLite DB and do not touch
 - Duolingo client: JWT parsing, API error handling, legacy endpoint URL construction.
 - Database: schema constraints, upserts, `first_seen` preservation, vocab-from-skills fallback.
 - Queries: XP stats aggregation, vocab/skill decay detection, course comparison.
-- Sync: null-safe XP summary mapping, avatar URL handling, legacy `language_data` key resolution, path-derived skill progress overlay with stored word-map fallback, active-course / XP drift conflicts.
-- Polling: manual-refresh cooldown, XP change detection, first-sync trigger, sync single-flight gate, account-quiet backoff.
+- Sync: null-safe XP summary mapping, avatar URL handling, legacy `language_data` key resolution, path-derived skill progress overlay with stored word-map fallback, active-course / XP drift conflicts, course-order recovery.
+- Polling: manual-refresh cooldown, XP change detection, first-sync trigger, sync single-flight gate, account-quiet backoff, preserved course-order retry.
 - API routes: read-only guards, sync conflict responses, status payload timing/state shape.
 - Classification: writing system / script skills, language names + flags.
 - Vocabulary study model: skill-bundle status buckets and flat word rows from skill word lists.

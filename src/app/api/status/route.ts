@@ -34,6 +34,13 @@ export async function GET() {
         jitterUntilMs: null,
         msUntilJitterRetry: null,
       },
+      courseOrderRecovery: {
+        active: false,
+        originalCourseId: null,
+        courseIds: [],
+        capturedAtMs: null,
+        conflictReason: null,
+      },
       accountQuiet: {
         active: false,
         reason: null,
@@ -83,6 +90,13 @@ export async function GET() {
         jitterUntilMs: null,
         msUntilJitterRetry: null,
       },
+      courseOrderRecovery: {
+        active: false,
+        originalCourseId: null,
+        courseIds: [],
+        capturedAtMs: null,
+        conflictReason: null,
+      },
       accountQuiet: {
         active: false,
         reason: null,
@@ -129,6 +143,7 @@ export async function GET() {
     fastIdleTicks: timing.fastIdleTicks,
     fastIdleTicksRequired: timing.fastIdleTicksRequired,
     courseConflict: timing.courseConflict,
+    courseOrderRecovery: timing.courseOrderRecovery,
     accountQuiet: timing.accountQuiet,
     nightlyHour: effectiveNightlyHour(),
   });

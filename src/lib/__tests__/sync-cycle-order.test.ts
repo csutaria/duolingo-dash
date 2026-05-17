@@ -155,6 +155,114 @@ describe("syncAllCourseDetails course-selector ordering", () => {
     expect(finalOrder).toEqual(initial);
   });
 
+  it("uses a preserved pre-conflict order target instead of the current scrambled order", async () => {
+    const original = [
+      { id: "A", xp: 100 },
+      { id: "B", xp: 500 },
+      { id: "C", xp: 200 },
+      { id: "D", xp: 1000 },
+    ];
+    const scrambled = [
+      { id: "C", xp: 200 },
+      { id: "D", xp: 1000 },
+      { id: "A", xp: 100 },
+      { id: "B", xp: 500 },
+    ];
+    const user = makeUser(scrambled, "C");
+    const client = makeClient(user);
+
+    const result = await mod.fullSync(client, true, {
+      courseOrderRecoveryTarget: {
+        capturedAtMs: 1_700_000_000_000,
+        originalCourseId: "A",
+        originalLearningLanguage: "ll-A",
+        originalFromLanguage: "fl-A",
+        conflictReason: "active_course",
+        courses: original.map((c) => ({
+          id: c.id,
+          learningLanguage: `ll-${c.id}`,
+          fromLanguage: `fl-${c.id}`,
+        })),
+      },
+    });
+
+    expect(result).toMatchObject({ type: "full", changed: true });
+    expect(switchCalls).toEqual(["D", "C", "B", "A"]);
+    expect(simulateSelector(scrambled.map((c) => c.id), switchCalls))
+      .toEqual(original.map((c) => c.id));
+  });
+
+  it("falls back to the current order when a stored recovery target has an incompatible course set", async () => {
+    const current = [
+      { id: "A", xp: 100 },
+      { id: "B", xp: 500 },
+      { id: "C", xp: 200 },
+    ];
+    const user = makeUser(current, "A");
+    const client = makeClient(user);
+
+    const result = await mod.fullSync(client, true, {
+      courseOrderRecoveryTarget: {
+        capturedAtMs: 1_700_000_000_000,
+        originalCourseId: "A",
+        originalLearningLanguage: "ll-A",
+        originalFromLanguage: "fl-A",
+        conflictReason: "active_course",
+        courses: [
+          { id: "A", learningLanguage: "ll-A", fromLanguage: "fl-A" },
+          { id: "B", learningLanguage: "ll-B", fromLanguage: "fl-B" },
+          { id: "D", learningLanguage: "ll-D", fromLanguage: "fl-D" },
+        ],
+      },
+    });
+
+    expect(result).toMatchObject({ type: "full", changed: true });
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        "Stored course-order recovery target no longer matches current course set; using current order",
+      ]),
+    );
+    expect(switchCalls).toEqual(["C", "B", "A"]);
+    expect(simulateSelector(current.map((c) => c.id), switchCalls)).toEqual(current.map((c) => c.id));
+  });
+
+  it("signals stale recovery target clearing when incompatible fallback conflicts before switching", async () => {
+    const current = [
+      { id: "A", xp: 100 },
+      { id: "B", xp: 500 },
+    ];
+    let guardChecks = 0;
+    const client = {
+      ...makeClient(makeUser(current, "A")),
+      getUser: jest.fn(() => {
+        guardChecks += 1;
+        return Promise.resolve(makeUser(current, guardChecks === 1 ? "A" : "C"));
+      }),
+    } as unknown as DuolingoClient;
+
+    const result = await mod.fullSync(client, true, {
+      courseOrderRecoveryTarget: {
+        capturedAtMs: 1_700_000_000_000,
+        originalCourseId: "A",
+        originalLearningLanguage: "ll-A",
+        originalFromLanguage: "fl-A",
+        conflictReason: "active_course",
+        courses: [
+          { id: "A", learningLanguage: "ll-A", fromLanguage: "fl-A" },
+          { id: "D", learningLanguage: "ll-D", fromLanguage: "fl-D" },
+        ],
+      },
+    });
+
+    expect(result).toMatchObject({
+      type: "skipped",
+      changed: false,
+      error: "Active course changed outside this sync",
+      courseOrderRecoveryTarget: null,
+    });
+    expect(switchCalls).toEqual([]);
+  });
+
   it("lands at [active, ...rest-in-user.courses-order] when active starts mid-array", async () => {
     // Contrived case: in practice Duolingo returns the active course at
     // index 0 of `user.courses` (mirroring the app's "active on top"
@@ -263,7 +371,42 @@ describe("syncAllCourseDetails course-selector ordering", () => {
         expect.stringContaining("expected B, saw C"),
       ]),
     );
+    expect(result.courseOrderRecoveryTarget).toMatchObject({
+      originalCourseId: "A",
+      originalLearningLanguage: "ll-A",
+      originalFromLanguage: "fl-A",
+      conflictReason: "active_course",
+      courses: [
+        { id: "A", learningLanguage: "ll-A", fromLanguage: "fl-A" },
+        { id: "B", learningLanguage: "ll-B", fromLanguage: "fl-B" },
+      ],
+    });
     expect(switchCalls).toEqual(["B"]);
+  });
+
+  it("does not return a recovery target when drift is caught before Dash switches courses", async () => {
+    const courses = [
+      { id: "A", xp: 100 },
+      { id: "B", xp: 200 },
+    ];
+    let guardChecks = 0;
+    const client = {
+      ...makeClient(makeUser(courses, "A")),
+      getUser: jest.fn(() => {
+        guardChecks += 1;
+        return Promise.resolve(makeUser(courses, guardChecks === 1 ? "A" : "C"));
+      }),
+    } as unknown as DuolingoClient;
+
+    const result = await mod.fullSync(client, true);
+
+    expect(result).toMatchObject({
+      type: "skipped",
+      changed: false,
+      error: "Active course changed outside this sync",
+    });
+    expect(result.courseOrderRecoveryTarget).toBeUndefined();
+    expect(switchCalls).toEqual([]);
   });
 
   it("does not save course-dependent details for a course that drifts mid-fetch", async () => {
